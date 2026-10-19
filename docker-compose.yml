@@ -29,6 +29,8 @@ services:
       - ./app:/app/app:ro
       - ./tests:/app/tests:ro
       - ./data:/app/data:ro
+      # Writable: app.make_eval saves the generated eval set here.
+      - ./data/eval:/app/data/eval
 
 volumes:
   pgdata:
