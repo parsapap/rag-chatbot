@@ -3,8 +3,8 @@ from dataclasses import dataclass
 
 import psycopg
 
-from app.chunking import Chunk
-from app.embeddings import DIM
+from app.services.chunking import Chunk
+from app.services.embeddings import DIM
 
 SCHEMA = f"""
 CREATE EXTENSION IF NOT EXISTS vector SCHEMA public;

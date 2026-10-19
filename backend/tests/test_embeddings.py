@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from google.genai import errors
 
-from app.embeddings import BATCH_SIZE, Embedder, cosine
+from app.services.embeddings import BATCH_SIZE, Embedder, cosine
 
 
 def _quota_error(delay: str = "3s") -> errors.ClientError:

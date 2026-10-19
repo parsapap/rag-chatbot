@@ -5,10 +5,10 @@ from pathlib import Path
 
 from google.genai import errors
 
-from app.chunking import chunk_pages
-from app.embeddings import Embedder
-from app.loaders import LoaderError, load
-from app.store import VectorStore
+from app.services.chunking import chunk_pages
+from app.services.embeddings import Embedder
+from app.services.loaders import LoaderError, load
+from app.db.store import VectorStore
 
 
 def ingest_file(store: VectorStore, embedder: Embedder, user_id: str, path: Path) -> str:

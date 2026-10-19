@@ -8,8 +8,8 @@ from pathlib import Path
 from google import genai
 from google.genai import errors, types
 
-from app.rag import CHAT_MODEL
-from app.store import VectorStore
+from app.services.rag import CHAT_MODEL
+from app.db.store import VectorStore
 
 MIN_CHARS = 200
 MAX_RETRIES = 5

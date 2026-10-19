@@ -1,7 +1,7 @@
 import pytest
 
-from app.chunking import MIN_CHUNK_CHARS, chunk_pages, split_text
-from app.loaders import Page
+from app.services.chunking import MIN_CHUNK_CHARS, chunk_pages, split_text
+from app.services.loaders import Page
 
 
 def _paragraphs(n: int) -> str:

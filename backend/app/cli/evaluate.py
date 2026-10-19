@@ -3,8 +3,8 @@ import json
 import sys
 from pathlib import Path
 
-from app.embeddings import Embedder
-from app.store import SearchResult, VectorStore
+from app.services.embeddings import Embedder
+from app.db.store import SearchResult, VectorStore
 
 KS = (1, 3, 5, 10)
 

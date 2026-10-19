@@ -2,8 +2,8 @@ import argparse
 import statistics
 import sys
 
-from app.chunking import CHUNK_OVERLAP, CHUNK_SIZE, chunk_pages
-from app.loaders import LoaderError, load
+from app.services.chunking import CHUNK_OVERLAP, CHUNK_SIZE, chunk_pages
+from app.services.loaders import LoaderError, load
 
 
 def main() -> int:

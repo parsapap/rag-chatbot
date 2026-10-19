@@ -1,7 +1,7 @@
 import argparse
 import sys
 
-from app.loaders import LoaderError, load
+from app.services.loaders import LoaderError, load
 
 
 def main() -> int:

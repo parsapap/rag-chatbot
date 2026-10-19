@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from app.rag import NO_ANSWER, RAG, SYSTEM_PROMPT, build_prompt, cited_numbers
-from app.store import SearchResult
+from app.services.rag import NO_ANSWER, RAG, SYSTEM_PROMPT, build_prompt, cited_numbers
+from app.db.store import SearchResult
 
 
 def _result(name: str, page: int, text: str) -> SearchResult:

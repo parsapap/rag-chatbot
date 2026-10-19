@@ -1,7 +1,7 @@
 import pymupdf
 import pytest
 
-from app.loaders import LoaderError, _fix_lam_alef, load, normalize, strip_page_furniture
+from app.services.loaders import LoaderError, _fix_lam_alef, load, normalize, strip_page_furniture
 
 ZWNJ = "\u200c"
 

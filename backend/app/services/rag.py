@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from google import genai
 from google.genai import types
 
-from app.embeddings import Embedder
-from app.messages import NO_ANSWER
-from app.store import SearchResult, VectorStore
+from app.services.embeddings import Embedder
+from app.core.messages import NO_ANSWER
+from app.db.store import SearchResult, VectorStore
 
 CHAT_MODEL = os.environ.get("GEMINI_CHAT_MODEL", "gemini-3.5-flash-lite")
 TOP_K = 5

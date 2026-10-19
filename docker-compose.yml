@@ -17,7 +17,7 @@ services:
       retries: 15
 
   app:
-    build: .
+    build: ./backend
     env_file: .env
     environment:
       DATABASE_URL: postgresql://rag:${POSTGRES_PASSWORD}@db:5432/rag
@@ -26,11 +26,12 @@ services:
         condition: service_healthy
     # Bind mounts: code and data edits on the host show up without rebuilding.
     volumes:
-      - ./app:/app/app:ro
-      - ./tests:/app/tests:ro
+      - ./backend/app:/app/app:ro
+      - ./backend/tests:/app/tests:ro
       - ./data:/app/data:ro
-      # Writable: app.make_eval saves the generated eval set here.
+      # Writable: app.cli.make_eval saves the generated eval set here.
       - ./data/eval:/app/data/eval
+
 
 volumes:
   pgdata:

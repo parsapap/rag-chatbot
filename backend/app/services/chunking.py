@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 
-from app.loaders import Page
+from app.services.loaders import Page
 
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 150

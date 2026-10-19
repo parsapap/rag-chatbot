@@ -4,9 +4,9 @@ import uuid
 import psycopg
 import pytest
 
-from app.chunking import Chunk
-from app.embeddings import DIM
-from app.store import VectorStore
+from app.services.chunking import Chunk
+from app.services.embeddings import DIM
+from app.db.store import VectorStore
 
 
 @pytest.fixture

@@ -3,9 +3,9 @@ import sys
 
 from google.genai import errors
 
-from app.embeddings import Embedder
-from app.rag import RAG, SYSTEM_PROMPT, TOP_K, build_prompt
-from app.store import VectorStore
+from app.services.embeddings import Embedder
+from app.services.rag import RAG, SYSTEM_PROMPT, TOP_K, build_prompt
+from app.db.store import VectorStore
 
 
 def main() -> int:

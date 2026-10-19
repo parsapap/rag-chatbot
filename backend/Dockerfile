@@ -17,4 +17,4 @@ COPY app/ ./app/
 RUN useradd --create-home appuser && chown appuser:appuser /app
 USER appuser
 
-CMD ["python", "-m", "app.hello"]
+CMD ["python", "-m", "app.cli.hello"]

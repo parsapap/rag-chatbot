@@ -1,7 +1,7 @@
 import pytest
 
-from app.evaluate import rank_of, summarize
-from app.store import SearchResult
+from app.cli.evaluate import rank_of, summarize
+from app.db.store import SearchResult
 
 
 def _r(name: str, page: int) -> SearchResult:

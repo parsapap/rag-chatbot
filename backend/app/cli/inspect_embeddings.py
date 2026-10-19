@@ -1,9 +1,9 @@
 import argparse
 import sys
 
-from app.chunking import chunk_pages
-from app.embeddings import Embedder, cosine
-from app.loaders import LoaderError, load
+from app.services.chunking import chunk_pages
+from app.services.embeddings import Embedder, cosine
+from app.services.loaders import LoaderError, load
 
 # Persian on purpose: the demo shows similarity across Persian paraphrases and English.
 DEMO_SENTENCES = [
