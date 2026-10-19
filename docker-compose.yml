@@ -1,0 +1,34 @@
+services:
+  db:
+    image: pgvector/pgvector:0.8.7-pg18-trixie
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_DB: rag
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    # Postgres 18 images keep data under /var/lib/postgresql/18/docker,
+    # so the volume is mounted one level up (not at .../data as in older images).
+    volumes:
+      - pgdata:/var/lib/postgresql
+    # No "ports:" on purpose: the DB is reachable only from other containers.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  app:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://rag:${POSTGRES_PASSWORD}@db:5432/rag
+    depends_on:
+      db:
+        condition: service_healthy
+    # Bind mounts: code and data edits on the host show up without rebuilding.
+    volumes:
+      - ./app:/app/app:ro
+      - ./tests:/app/tests:ro
+      - ./data:/app/data:ro
+
+volumes:
+  pgdata:
