@@ -32,6 +32,21 @@ services:
       # Writable: app.cli.make_eval saves the generated eval set here.
       - ./data/eval:/app/data/eval
 
+  api:
+    build: ./backend
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://rag:${POSTGRES_PASSWORD}@db:5432/rag
+    depends_on:
+      db:
+        condition: service_healthy
+    # 127.0.0.1 only: auth is a placeholder (X-User-Id header) until phase 6,
+    # so the API must not be reachable from other machines.
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./backend/app:/app/app:ro
 
 volumes:
   pgdata:

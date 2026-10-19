@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import Literal
 
 import psycopg
 
@@ -19,6 +20,10 @@ CREATE TABLE IF NOT EXISTS documents (
     UNIQUE (user_id, sha256)
 );
 
+-- ADD COLUMN IF NOT EXISTS so databases created before these columns existed get them too.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready';
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS error TEXT;
+
 CREATE TABLE IF NOT EXISTS chunks (
     id           BIGSERIAL PRIMARY KEY,
     document_id  BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -34,6 +39,17 @@ CREATE INDEX IF NOT EXISTS chunks_embedding_idx
     ON chunks USING hnsw (embedding vector_cosine_ops);
 """
 
+Status = Literal["processing", "ready", "failed"]
+
+_DOCUMENT_SELECT = """
+    SELECT d.id, d.filename, d.pages, count(c.id), d.status, d.error
+    FROM documents d
+    LEFT JOIN chunks c ON c.document_id = d.id
+    WHERE d.user_id = %(user_id)s {extra}
+    GROUP BY d.id
+    ORDER BY d.id
+"""
+
 
 @dataclass(frozen=True)
 class Document:
@@ -41,6 +57,8 @@ class Document:
     filename: str
     pages: int
     chunks: int
+    status: Status
+    error: str | None
 
 
 @dataclass(frozen=True)
@@ -57,15 +75,17 @@ def _vector_literal(v: list[float]) -> str:
 
 
 class VectorStore:
-    """Every method takes user_id and filters by it: a user only sees their own data."""
+    """Every per-user method takes user_id and filters by it: a user only sees their own data."""
 
     def __init__(self, conn: psycopg.Connection):
         self.conn = conn
 
     @classmethod
-    def connect(cls, url: str | None = None) -> "VectorStore":
+    def connect(cls, url: str | None = None, *, create_schema: bool = True) -> "VectorStore":
         store = cls(psycopg.connect(url or os.environ["DATABASE_URL"], autocommit=True))
-        store.init_schema()
+        if create_schema:
+            store.init_schema()
+        store.configure_session()
         return store
 
     def close(self) -> None:
@@ -80,9 +100,11 @@ class VectorStore:
     def init_schema(self) -> None:
         with self.conn.transaction():
             self.conn.execute(SCHEMA)
+
+    def configure_session(self) -> None:
         # With a WHERE filter, HNSW could return fewer than LIMIT rows (it finds
         # nearest neighbours first, then drops other users' rows). This makes it
-        # keep scanning until enough rows match.
+        # keep scanning until enough rows match. Per connection, so run on each.
         self.conn.execute("SET hnsw.iterative_scan = strict_order")
 
     def find_document(self, user_id: str, sha256: str) -> int | None:
@@ -101,27 +123,71 @@ class VectorStore:
         chunks: list[Chunk],
         vectors: list[list[float]],
     ) -> int:
-        rows = [
-            (c.page, c.index, c.text, _vector_literal(v))
-            for c, v in zip(chunks, vectors, strict=True)
-        ]
         # One transaction: either the document and all its chunks are saved, or nothing.
         with self.conn.transaction():
-            doc_id = self.conn.execute(
-                "INSERT INTO documents (user_id, filename, sha256, pages) "
-                "VALUES (%s, %s, %s, %s) RETURNING id",
-                (user_id, filename, sha256, pages),
-            ).fetchone()[0]
-            with self.conn.cursor() as cur:
-                cur.executemany(
-                    "INSERT INTO chunks "
-                    "(document_id, user_id, page, chunk_index, content, embedding) "
-                    "VALUES (%s, %s, %s, %s, %s, %s::vector)",
-                    [(doc_id, user_id, *r) for r in rows],
-                )
+            doc_id = self._insert_document(user_id, filename, sha256, pages, "ready")
+            self._insert_chunks(doc_id, user_id, chunks, vectors)
         return doc_id
 
+    def create_document(self, user_id: str, filename: str, sha256: str, pages: int) -> int:
+        return self._insert_document(user_id, filename, sha256, pages, "processing")
+
+    def complete_document(
+        self, document_id: int, user_id: str, chunks: list[Chunk], vectors: list[list[float]]
+    ) -> None:
+        with self.conn.transaction():
+            # Lock the row: if the user deleted the document meanwhile, stop here
+            # instead of failing on the foreign key.
+            row = self.conn.execute(
+                "SELECT 1 FROM documents WHERE id = %s AND status = 'processing' FOR UPDATE",
+                (document_id,),
+            ).fetchone()
+            if row is None:
+                return
+            self._insert_chunks(document_id, user_id, chunks, vectors)
+            self.conn.execute(
+                "UPDATE documents SET status = 'ready', error = NULL WHERE id = %s",
+                (document_id,),
+            )
+
+    def fail_document(self, document_id: int, error: str) -> None:
+        self.conn.execute(
+            "UPDATE documents SET status = 'failed', error = %s "
+            "WHERE id = %s AND status = 'processing'",
+            (error, document_id),
+        )
+
+    def fail_interrupted(self) -> int:
+        # Assumes a single API process: its background tasks die with it, so
+        # anything still "processing" at startup will never finish.
+        cur = self.conn.execute(
+            "UPDATE documents SET status = 'failed', "
+            "error = 'interrupted: server restarted before processing finished' "
+            "WHERE status = 'processing'"
+        )
+        return cur.rowcount
+
+    def get_document(self, user_id: str, document_id: int) -> Document | None:
+        row = self.conn.execute(
+            _DOCUMENT_SELECT.format(extra="AND d.id = %(id)s"),
+            {"user_id": user_id, "id": document_id},
+        ).fetchone()
+        return Document(*row) if row else None
+
+    def list_documents(self, user_id: str) -> list[Document]:
+        rows = self.conn.execute(_DOCUMENT_SELECT.format(extra=""), {"user_id": user_id}).fetchall()
+        return [Document(*r) for r in rows]
+
+    def delete_document(self, user_id: str, document_id: int) -> bool:
+        # Chunks go with it via ON DELETE CASCADE.
+        cur = self.conn.execute(
+            "DELETE FROM documents WHERE id = %s AND user_id = %s",
+            (document_id, user_id),
+        )
+        return cur.rowcount == 1
+
     def search(self, user_id: str, query_vector: list[float], k: int = 5) -> list[SearchResult]:
+        # Only "ready" documents have chunks, so no status filter is needed here.
         # <=> is cosine distance (0 = same direction), so score = 1 - distance.
         rows = self.conn.execute(
             """
@@ -137,24 +203,26 @@ class VectorStore:
         ).fetchall()
         return [SearchResult(*r) for r in rows]
 
-    def list_documents(self, user_id: str) -> list[Document]:
-        rows = self.conn.execute(
-            """
-            SELECT d.id, d.filename, d.pages, count(c.id)
-            FROM documents d
-            LEFT JOIN chunks c ON c.document_id = d.id
-            WHERE d.user_id = %s
-            GROUP BY d.id
-            ORDER BY d.id
-            """,
-            (user_id,),
-        ).fetchall()
-        return [Document(*r) for r in rows]
+    def _insert_document(
+        self, user_id: str, filename: str, sha256: str, pages: int, status: Status
+    ) -> int:
+        return self.conn.execute(
+            "INSERT INTO documents (user_id, filename, sha256, pages, status) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (user_id, filename, sha256, pages, status),
+        ).fetchone()[0]
 
-    def delete_document(self, user_id: str, document_id: int) -> bool:
-        # Chunks go with it via ON DELETE CASCADE.
-        cur = self.conn.execute(
-            "DELETE FROM documents WHERE id = %s AND user_id = %s",
-            (document_id, user_id),
-        )
-        return cur.rowcount == 1
+    def _insert_chunks(
+        self, document_id: int, user_id: str, chunks: list[Chunk], vectors: list[list[float]]
+    ) -> None:
+        rows = [
+            (document_id, user_id, c.page, c.index, c.text, _vector_literal(v))
+            for c, v in zip(chunks, vectors, strict=True)
+        ]
+        with self.conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO chunks "
+                "(document_id, user_id, page, chunk_index, content, embedding) "
+                "VALUES (%s, %s, %s, %s, %s, %s::vector)",
+                rows,
+            )
