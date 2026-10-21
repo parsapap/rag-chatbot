@@ -60,11 +60,11 @@ class RAG:
         self.model = model
         self.k = k
 
-    def retrieve(self, user_id: str, question: str) -> list[SearchResult]:
-        return self.store.search(user_id, self.embedder.embed_query(question), self.k)
+    def retrieve(self, user_id: str, question: str, k: int | None = None) -> list[SearchResult]:
+        return self.store.search(user_id, self.embedder.embed_query(question), k or self.k)
 
-    def ask(self, user_id: str, question: str) -> Answer:
-        results = self.retrieve(user_id, question)
+    def ask(self, user_id: str, question: str, k: int | None = None) -> Answer:
+        results = self.retrieve(user_id, question, k)
         if not results:
             # No documents: nothing to ground on, so don't spend an LLM call.
             return Answer(NO_ANSWER, [], [])
