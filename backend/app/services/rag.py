@@ -1,5 +1,6 @@
 import os
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from google import genai
@@ -70,9 +71,29 @@ class RAG:
             return Answer(NO_ANSWER, [], [])
 
         response = self._client.models.generate_content(
-            model=self.model,
-            contents=build_prompt(question, results),
-            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, temperature=0.2),
+            model=self.model, contents=build_prompt(question, results), config=self._config()
         )
         text = (response.text or "").strip() or NO_ANSWER
         return Answer(text, results, cited_numbers(text, len(results)))
+
+    def stream(
+        self, user_id: str, question: str, k: int | None = None
+    ) -> tuple[list[SearchResult], Iterator[str]]:
+        # Retrieval runs now, so its errors surface before any response is sent.
+        # The model is only called when the returned iterator is consumed.
+        results = self.retrieve(user_id, question, k)
+        if not results:
+            return results, iter([NO_ANSWER])
+        return results, self._generate(build_prompt(question, results))
+
+    def _generate(self, prompt: str) -> Iterator[str]:
+        # A generator method keeps self, and so self._client, alive while
+        # streaming: a garbage-collected genai.Client closes its connection.
+        for chunk in self._client.models.generate_content_stream(
+            model=self.model, contents=prompt, config=self._config()
+        ):
+            if chunk.text:
+                yield chunk.text
+
+    def _config(self) -> types.GenerateContentConfig:
+        return types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, temperature=0.2)

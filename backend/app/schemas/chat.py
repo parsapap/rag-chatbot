@@ -12,12 +12,15 @@ class ChatRequest(BaseModel):
     k: int = Field(default=TOP_K, ge=1, le=10)
 
 
-class SourceOut(BaseModel):
+class RetrievedSource(BaseModel):
     number: int  # the [n] the answer uses to cite this source
     filename: str
     page: int
     score: float
     content: str
+
+
+class SourceOut(RetrievedSource):
     cited: bool
 
 

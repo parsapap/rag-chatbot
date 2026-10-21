@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -34,6 +35,15 @@ class FakeModels:
         if self.error:
             raise self.error
         return SimpleNamespace(text=self.reply)
+
+    def generate_content_stream(self, model, contents, config):
+        # Like the real SDK: a generator, so nothing happens until it is consumed.
+        self.calls += 1
+        if self.error:
+            raise self.error
+        for word in self.reply.split(" "):
+            yield SimpleNamespace(text=word + " ")
+        yield SimpleNamespace(text=None)
 
 
 @pytest.fixture
@@ -114,3 +124,55 @@ def test_other_model_error_becomes_502(client):
         400, {"error": {"code": 400, "message": "bad", "status": "INVALID_ARGUMENT"}}
     )
     assert _ask(client, "alice", {"question": "فیدیبو آرت چیست؟"}).status_code == 502
+
+
+def _events(client, user, body):
+    r = client.post("/chat/stream", headers={"X-User-Id": user}, json=body)
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    out = []
+    for block in r.text.strip().split("\n\n"):
+        name, data = block.split("\n")
+        out.append((name.removeprefix("event: "), json.loads(data.removeprefix("data: "))))
+    return out
+
+
+def test_stream_sends_sources_then_deltas_then_done(client):
+    events = _events(client, "alice", {"question": "فیدیبو آرت چیست؟", "k": 2})
+    names = [n for n, _ in events]
+    assert names[0] == "sources"
+    assert names[-1] == "done"
+    assert set(names[1:-1]) == {"delta"}
+    assert len(names) > 3
+
+    sources = events[0][1]
+    assert [(s["number"], s["page"]) for s in sources] == [(1, 14), (2, 1)]
+    assert "cited" not in sources[0]
+
+    text = "".join(d["text"] for n, d in events if n == "delta")
+    assert text.strip() == client.models.reply
+    assert events[-1][1] == {"answered": True, "cited": [1]}
+
+
+def test_stream_user_without_documents(client):
+    events = _events(client, "bob", {"question": "q"})
+    assert events == [
+        ("sources", []),
+        ("delta", {"text": NO_ANSWER}),
+        ("done", {"answered": False, "cited": []}),
+    ]
+    assert client.models.calls == 0
+
+
+def test_stream_model_error_is_sent_as_event(client):
+    client.models.error = errors.ClientError(
+        429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}
+    )
+    events = _events(client, "alice", {"question": "فیدیبو آرت چیست؟"})
+    assert events[0][0] == "sources"
+    assert events[-1] == ("error", {"status": 503, "detail": "model quota exceeded, try again in a minute"})
+
+
+def test_stream_invalid_request_rejected(client):
+    r = client.post("/chat/stream", headers={"X-User-Id": "alice"}, json={"question": " "})
+    assert r.status_code == 422
