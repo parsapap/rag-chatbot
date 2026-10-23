@@ -84,5 +84,6 @@ def chat_stream(body: ChatRequest, user_id: CurrentUser, rag: Rag) -> StreamingR
         _sse(results, pieces),
         media_type="text/event-stream",
         # no-buffering: proxies would otherwise hold the pieces until the end.
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        # no-transform: stops proxies (the Next.js dev server too) from gzipping, which buffers the whole stream.
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
     )
