@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+/* Zinc tokens from the commandcode.ai reference; the theme follows the system setting. */
+:root {
+  color-scheme: light dark;
+  --background: #fff;
+  --foreground: #09090b;
+  --card: #fafafa;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --border: #e4e4e7;
+  --input: #d4d4d8;
+  --ok: #1a7f37;
+  --wait: #9a6700;
+  --destructive: #cf222e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #000;
+    --foreground: #fafafa;
+    --card: #09090b;
+    --muted: #18181b;
+    --muted-foreground: #a1a1aa;
+    --border: #222225;
+    --input: #27272a;
+    --ok: #3fb950;
+    --wait: #d29922;
+    --destructive: #f85149;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ok: var(--ok);
+  --color-wait: var(--wait);
+  --color-destructive: var(--destructive);
+  /* Geist has no Arabic-script glyphs, so Persian text falls back to Vazirmatn glyph by glyph. */
+  --font-sans: var(--font-geist), var(--font-vazirmatn), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), var(--font-vazirmatn), ui-monospace, monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}

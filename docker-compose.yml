@@ -48,5 +48,18 @@ services:
     volumes:
       - ./backend/app:/app/app:ro
 
+  frontend:
+    build: ./frontend
+    environment:
+      # Server-side calls go over the compose network, so no CORS is needed.
+      API_URL: http://api:8000
+    depends_on:
+      - api
+    # 127.0.0.1 only, same as the API: there is no real auth yet.
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./frontend/app:/app/app:ro
+
 volumes:
   pgdata:
