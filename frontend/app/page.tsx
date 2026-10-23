@@ -1,3 +1,5 @@
+import Documents from "./documents";
+
 async function apiIsUp(): Promise<boolean> {
   try {
     const res = await fetch(`${process.env.API_URL}/health`, {
@@ -27,12 +29,7 @@ export default async function Home() {
       </header>
 
       <div className="grid min-h-0 lg:grid-cols-[300px_1fr_400px]">
-        <aside className="border-b border-border p-5 lg:border-b-0">
-          <h2 className="border-b border-border pb-3 font-medium">Documents</h2>
-          <p className="pt-4 text-sm text-muted-foreground">
-            No documents yet. Upload a PDF, TXT or MD file, up to 20 MB.
-          </p>
-        </aside>
+        <Documents />
 
         <main className="flex flex-col border-border p-8 lg:border-x">
           <p className="max-w-prose text-muted-foreground">
