@@ -18,6 +18,12 @@ def rank_of(results: list[SearchResult], filename: str, page: int) -> int | None
     return None
 
 
+def best_rank(results: list[SearchResult], filename: str, pages: list[int]) -> int | None:
+    # Some facts appear on several pages (a total in a table and in a note); any of them counts.
+    ranks = [r for p in pages if (r := rank_of(results, filename, p)) is not None]
+    return min(ranks, default=None)
+
+
 def summarize(ranks: list[int | None], ks: tuple[int, ...] = KS) -> dict[str, float]:
     n = len(ranks)
     out = {f"hit@{k}": sum(1 for r in ranks if r is not None and r <= k) / n for k in ks}
@@ -41,26 +47,43 @@ def main() -> int:
         print(f"error: {path} is empty", file=sys.stderr)
         return 1
 
+    for it in items:
+        # Generated items carry "page"; hand-written ones carry "pages", empty when the documents have no answer.
+        it.setdefault("pages", [it["page"]] if it.get("page") is not None else [])
+    answerable = [it for it in items if it["pages"]]
+
     vectors = Embedder().embed_queries([it["question"] for it in items])
     ranks: list[int | None] = []
+    top_scores: dict[bool, list[float]] = {True: [], False: []}
     with VectorStore.connect() as store:
         for it, v in zip(items, vectors):
             results = store.search(it["user_id"], v, max(KS))
-            rank = rank_of(results, it["filename"], it["page"])
+            top_scores[bool(it["pages"])].append(results[0].score if results else 0.0)
+            if not it["pages"]:
+                continue
+            rank = best_rank(results, it["filename"], it["pages"])
             ranks.append(rank)
             if args.show_misses and (rank is None or rank > 5):
                 print(f"\nMISS (rank={rank}) [{it['user_id']}] {it['question']}")
-                print(f"  expected: {it['filename']} p{it['page']}")
+                print(f"  expected: {it['filename']} p{it['pages']}")
                 for r in results[:3]:
                     print(f"  got:      {r.filename} p{r.page}  score={r.score:.3f}")
 
-    print(f"\nquestions: {len(items)}")
-    for name, value in summarize(ranks).items():
-        print(f"  {name:7} {value:.3f}")
+    print(f"\nanswerable questions: {len(answerable)}")
+    if ranks:
+        for name, value in summarize(ranks).items():
+            print(f"  {name:7} {value:.3f}")
+
+    # If every answerable question scores above every unanswerable one, a score cutoff could skip the LLM.
+    print("\ntop-1 score:")
+    for label, key in (("answerable", True), ("no answer", False)):
+        s = top_scores[key]
+        if s:
+            print(f"  {label:10} min={min(s):.3f} max={max(s):.3f}  ({len(s)} q)")
 
     print("\nhit@5 per file:")
     per_file: dict[str, list[int | None]] = {}
-    for it, r in zip(items, ranks):
+    for it, r in zip(answerable, ranks):
         per_file.setdefault(it["filename"], []).append(r)
     for name, rs in sorted(per_file.items()):
         print(f"  {summarize(rs, (5,))['hit@5']:.2f}  ({len(rs):2} q)  {name}")

@@ -1,6 +1,6 @@
 import pytest
 
-from app.cli.evaluate import rank_of, summarize
+from app.cli.evaluate import best_rank, rank_of, summarize
 from app.db.store import SearchResult
 
 
@@ -21,3 +21,10 @@ def test_summarize_hits_and_mrr():
     assert m["hit@3"] == pytest.approx(0.5)
     assert m["hit@5"] == pytest.approx(0.75)
     assert m["mrr"] == pytest.approx((1 + 0.5 + 0 + 0.25) / 4)
+
+
+def test_best_rank_takes_the_highest_of_several_pages():
+    results = [_r("a.pdf", 3), _r("a.pdf", 5), _r("a.pdf", 2)]
+    assert best_rank(results, "a.pdf", [2, 5]) == 2
+    assert best_rank(results, "a.pdf", [9]) is None
+    assert best_rank(results, "a.pdf", []) is None
