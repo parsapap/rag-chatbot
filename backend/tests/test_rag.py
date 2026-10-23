@@ -83,3 +83,9 @@ def test_empty_model_reply_becomes_no_answer():
 def test_prompt_gives_english_no_answer_for_english_question():
     prompt = build_prompt("What is it?", [_result("a.pdf", 1, "متن")])
     assert prompt.endswith(NO_ANSWER["en"])
+
+
+def test_prompt_names_the_question_language():
+    sources = [_result("a.pdf", 1, "متن فارسی")]
+    assert "Write the answer in English" in build_prompt("When did it start?", sources)
+    assert "Write the answer in Persian" in build_prompt("از کی شروع شد؟", sources)
