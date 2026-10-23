@@ -1,7 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { request } from "./api-client";
+import { api, request } from "./api-client";
 import { parseEvents, splitCitations } from "./chat-parsing";
 import { plural } from "./documents";
 
@@ -13,15 +13,42 @@ type Turn = {
   done: { answered: boolean; cited: number[] } | null;
   error: string | null;
 };
+type SavedMessage = { question: string; answer: string; answered: boolean; sources: (Source & { cited: boolean })[] };
 
-export default function Chat({ userId }: { userId: string }) {
+const toTurn = (m: SavedMessage): Turn => ({
+  question: m.question,
+  text: m.answer,
+  sources: m.sources,
+  done: { answered: m.answered, cited: m.sources.filter((s) => s.cited).map((s) => s.number) },
+  error: null,
+});
+
+type Props = { userId: string; conversationId: number | null; onSaved: (id: number) => void };
+
+export default function Chat({ userId, conversationId, onSaved }: Props) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [loading, setLoading] = useState(conversationId !== null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<{ turn: number; source: number } | null>(null);
   const abort = useRef<AbortController | null>(null);
   const end = useRef<HTMLDivElement>(null);
+  // The server gives a new conversation its id with the first answer; follow-ups join it.
+  const convId = useRef(conversationId);
 
   useEffect(() => () => abort.current?.abort(), []);
+
+  useEffect(() => {
+    if (conversationId === null) return;
+    let live = true;
+    api<{ messages: SavedMessage[] }>(userId, `/conversations/${conversationId}`)
+      .then((c) => live && setTurns(c.messages.map(toTurn)))
+      .catch((e: Error) => live && setLoadError(e.message))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [userId, conversationId]);
   useEffect(() => {
     if (turns.length) end.current?.scrollIntoView({ block: "end" });
   }, [turns.length]);
@@ -45,7 +72,7 @@ export default function Chat({ userId }: { userId: string }) {
       const res = await request(userId, "/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ question, conversation_id: convId.current }),
         signal: controller.signal,
       });
       const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
@@ -60,7 +87,10 @@ export default function Chat({ userId }: { userId: string }) {
           else if (event === "delta") updateLast((t) => ({ text: t.text + (data as { text: string }).text }));
           else if (event === "done") {
             finished = true;
-            updateLast(() => ({ done: data as Turn["done"] }));
+            const d = data as { answered: boolean; cited: number[]; conversation_id: number };
+            updateLast(() => ({ done: { answered: d.answered, cited: d.cited } }));
+            convId.current = d.conversation_id;
+            onSaved(d.conversation_id);
           } else if (event === "error") {
             finished = true;
             updateLast(() => ({ error: (data as { detail: string }).detail }));
@@ -83,11 +113,19 @@ export default function Chat({ userId }: { userId: string }) {
     <>
       <main className="flex min-w-0 flex-col border-border lg:border-x">
         <div className="flex flex-1 flex-col gap-10 p-8">
-          {turns.length === 0 && (
-            <p className="max-w-prose text-muted-foreground">
-              Ask a question about your documents, in English or Persian. Every answer cites the page it comes
-              from.
+          {loading ? (
+            <p className="text-muted-foreground">Loading conversation…</p>
+          ) : loadError ? (
+            <p role="alert" dir="auto" className="text-sm text-destructive">
+              {loadError}
             </p>
+          ) : (
+            turns.length === 0 && (
+              <p className="max-w-prose text-muted-foreground">
+                Ask a question about your documents, in English or Persian. Every answer cites the page it comes
+                from.
+              </p>
+            )
           )}
           {turns.map((t, i) => (
             <article key={i} aria-busy={streaming && i === turns.length - 1} className="flex flex-col gap-3">
@@ -150,7 +188,7 @@ export default function Chat({ userId }: { userId: string }) {
             dir="auto"
             required
             maxLength={2000}
-            disabled={streaming}
+            disabled={streaming || loading || loadError !== null}
             autoComplete="off"
             aria-label="Question"
             placeholder="Ask about your documents…"
@@ -158,7 +196,7 @@ export default function Chat({ userId }: { userId: string }) {
           />
           <button
             type="submit"
-            disabled={streaming}
+            disabled={streaming || loading || loadError !== null}
             className="bg-foreground px-5 font-medium text-background disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
           >
             {streaming ? "Answering…" : "Ask"}
