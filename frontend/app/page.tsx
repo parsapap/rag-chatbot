@@ -1,4 +1,4 @@
-import Documents from "./documents";
+import Workspace from "./workspace";
 
 async function apiIsUp(): Promise<boolean> {
   try {
@@ -29,19 +29,7 @@ export default async function Home() {
       </header>
 
       <div className="grid min-h-0 lg:grid-cols-[300px_1fr_400px]">
-        <Documents />
-
-        <main className="flex flex-col border-border p-8 lg:border-x">
-          <p className="max-w-prose text-muted-foreground">
-            Ask a question about your documents, in English or Persian. Every answer cites the page it
-            comes from.
-          </p>
-        </main>
-
-        <aside className="border-t border-border p-5 lg:border-t-0">
-          <h2 className="border-b border-border pb-3 font-medium">Sources</h2>
-          <p className="pt-4 text-sm text-muted-foreground">The sources behind an answer show up here.</p>
-        </aside>
+        <Workspace />
       </div>
     </div>
   );

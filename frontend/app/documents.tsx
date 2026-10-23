@@ -5,7 +5,7 @@ import { api, type Doc } from "./api-client";
 
 const POLL_MS = 2000;
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 const STATUS = {
   ready: { glyph: "●", className: "text-ok" },
@@ -13,8 +13,7 @@ const STATUS = {
   failed: { glyph: "✕", className: "text-destructive" },
 } as const;
 
-export default function Documents() {
-  const [userId, setUserId] = useState("demo_a");
+export default function Documents({ userId, onUserChange }: { userId: string; onUserChange: (id: string) => void }) {
   const [docs, setDocs] = useState<Doc[] | null>(null);
   const [version, setVersion] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -43,7 +42,7 @@ export default function Documents() {
     e.preventDefault();
     const next = String(new FormData(e.currentTarget).get("user"));
     if (next === userId) return;
-    setUserId(next);
+    onUserChange(next);
     setDocs(null);
     setMessage(null);
   }

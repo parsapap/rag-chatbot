@@ -17,13 +17,19 @@ export function errorMessage(status: number, body: unknown): string {
   return status >= 500 ? API_DOWN : `Request failed (${status}).`;
 }
 
-export async function api<T = unknown>(userId: string, path: string, init: RequestInit = {}): Promise<T> {
+export async function request(userId: string, path: string, init: RequestInit = {}): Promise<Response> {
   let res: Response;
   try {
     res = await fetch(`/api${path}`, { ...init, headers: { ...init.headers, "X-User-Id": userId } });
-  } catch {
+  } catch (e) {
+    if ((e as Error).name === "AbortError") throw e;
     throw new Error(API_DOWN);
   }
   if (!res.ok) throw new Error(errorMessage(res.status, await res.json().catch(() => null)));
+  return res;
+}
+
+export async function api<T = unknown>(userId: string, path: string, init: RequestInit = {}): Promise<T> {
+  const res = await request(userId, path, init);
   return (res.status === 204 ? null : await res.json()) as T;
 }
