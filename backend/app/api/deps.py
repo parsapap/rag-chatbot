@@ -25,7 +25,8 @@ def get_store() -> Iterator[VectorStore]:
 
 
 CurrentUser = Annotated[str, Depends(get_current_user)]
-Store = Annotated[VectorStore, Depends(get_store)]
+# Request scope: the connection stays open until the response ends, so a streamed answer can still be saved.
+Store = Annotated[VectorStore, Depends(get_store, scope="request")]
 
 
 def get_rag(store: Store) -> RAG:

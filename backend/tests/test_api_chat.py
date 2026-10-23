@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from google.genai import errors
 
-from app.api.deps import get_rag
+from app.api.deps import get_rag, get_store
 from app.core.messages import NO_ANSWER
 from app.main import app
 from app.services.chunking import Chunk
@@ -60,6 +60,7 @@ def client(store):
         [_vec(0), _vec(1)],
     )
     models = FakeModels()
+    app.dependency_overrides[get_store] = lambda: store
     app.dependency_overrides[get_rag] = lambda: RAG(
         store, FakeEmbedder(), client=SimpleNamespace(models=models)
     )
@@ -87,7 +88,7 @@ def test_answer_with_numbered_sources(client):
 
 def test_user_without_documents_gets_no_answer_and_no_llm_call(client):
     body = _ask(client, "bob", {"question": "فیدیبو آرت چیست؟"}).json()
-    assert body == {"answer": NO_ANSWER["fa"], "answered": False, "sources": []}
+    assert (body["answer"], body["answered"], body["sources"]) == (NO_ANSWER["fa"], False, [])
     assert client.models.calls == 0
 
 
@@ -151,16 +152,16 @@ def test_stream_sends_sources_then_deltas_then_done(client):
 
     text = "".join(d["text"] for n, d in events if n == "delta")
     assert text.strip() == client.models.reply
-    assert events[-1][1] == {"answered": True, "cited": [1]}
+    done = events[-1][1]
+    assert (done["answered"], done["cited"]) == (True, [1])
+    assert isinstance(done["conversation_id"], int)
 
 
 def test_stream_user_without_documents(client):
     events = _events(client, "bob", {"question": "q"})
-    assert events == [
-        ("sources", []),
-        ("delta", {"text": NO_ANSWER["en"]}),
-        ("done", {"answered": False, "cited": []}),
-    ]
+    assert events[:2] == [("sources", []), ("delta", {"text": NO_ANSWER["en"]})]
+    assert events[2][0] == "done"
+    assert (events[2][1]["answered"], events[2][1]["cited"]) == (False, [])
     assert client.models.calls == 0
 
 
@@ -188,3 +189,76 @@ def test_model_answering_in_the_other_language_is_still_flagged(client):
     client.models.reply = NO_ANSWER["en"]
     body = _ask(client, "alice", {"question": "پایتخت فرانسه کجاست؟"}).json()
     assert body["answered"] is False
+
+
+def _conversations(client, user):
+    return client.get("/conversations", headers={"X-User-Id": user}).json()
+
+
+def test_first_question_starts_a_conversation_and_follow_up_joins_it(client):
+    first = _ask(client, "alice", {"question": "فیدیبو آرت چیست؟", "k": 2}).json()
+    cid = first["conversation_id"]
+    second = _ask(client, "alice", {"question": "از کی شروع شد؟", "conversation_id": cid}).json()
+    assert second["conversation_id"] == cid
+
+    [conv] = _conversations(client, "alice")
+    assert (conv["id"], conv["title"]) == (cid, "فیدیبو آرت چیست؟")
+    detail = client.get(f"/conversations/{cid}", headers={"X-User-Id": "alice"}).json()
+    assert [m["question"] for m in detail["messages"]] == ["فیدیبو آرت چیست؟", "از کی شروع شد؟"]
+    msg = detail["messages"][0]
+    assert (msg["answer"], msg["answered"]) == (client.models.reply, True)
+    assert [(s["number"], s["page"], s["cited"]) for s in msg["sources"]] == [(1, 14, True), (2, 1, False)]
+
+
+def test_stream_saves_the_finished_answer(client):
+    events = _events(client, "alice", {"question": "فیدیبو آرت چیست؟", "k": 2})
+    cid = events[-1][1]["conversation_id"]
+    detail = client.get(f"/conversations/{cid}", headers={"X-User-Id": "alice"}).json()
+    [msg] = detail["messages"]
+    assert msg["answer"] == client.models.reply
+    assert [s["cited"] for s in msg["sources"]] == [True, False]
+
+
+def test_failed_answer_is_not_saved(client):
+    client.models.error = errors.ClientError(
+        429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}
+    )
+    _ask(client, "alice", {"question": "فیدیبو آرت چیست؟"})
+    _events(client, "alice", {"question": "فیدیبو آرت چیست؟"})
+    assert _conversations(client, "alice") == []
+
+
+def test_other_users_cannot_see_join_or_delete_a_conversation(client):
+    cid = _ask(client, "alice", {"question": "فیدیبو آرت چیست؟"}).json()["conversation_id"]
+    bob = {"X-User-Id": "bob"}
+    assert _conversations(client, "bob") == []
+    assert client.get(f"/conversations/{cid}", headers=bob).status_code == 404
+    assert client.delete(f"/conversations/{cid}", headers=bob).status_code == 404
+    r = client.post("/chat", headers=bob, json={"question": "q", "conversation_id": cid})
+    assert r.status_code == 404
+    r = client.post("/chat/stream", headers=bob, json={"question": "q", "conversation_id": cid})
+    assert r.status_code == 404
+    assert client.models.calls == 1
+
+
+def test_delete_removes_conversation_and_messages(client):
+    cid = _ask(client, "alice", {"question": "فیدیبو آرت چیست؟"}).json()["conversation_id"]
+    alice = {"X-User-Id": "alice"}
+    assert client.delete(f"/conversations/{cid}", headers=alice).status_code == 204
+    assert client.get(f"/conversations/{cid}", headers=alice).status_code == 404
+    assert _conversations(client, "alice") == []
+
+
+def test_long_question_title_is_cut(client):
+    q = "س" * 200
+    _ask(client, "alice", {"question": q})
+    [conv] = _conversations(client, "alice")
+    assert conv["title"] == q[:80]
+
+
+def test_most_recent_conversation_is_listed_first(client):
+    a = _ask(client, "alice", {"question": "اول"}).json()["conversation_id"]
+    b = _ask(client, "alice", {"question": "دوم"}).json()["conversation_id"]
+    assert [c["id"] for c in _conversations(client, "alice")] == [b, a]
+    _ask(client, "alice", {"question": "ادامه", "conversation_id": a})
+    assert [c["id"] for c in _conversations(client, "alice")] == [a, b]

@@ -1,8 +1,10 @@
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 from app.services.chunking import Chunk
 from app.services.embeddings import DIM
@@ -37,7 +39,33 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS chunks_user_id_idx ON chunks (user_id);
 CREATE INDEX IF NOT EXISTS chunks_embedding_idx
     ON chunks USING hnsw (embedding vector_cosine_ops);
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id          BIGSERIAL PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS conversations_user_id_idx ON conversations (user_id, updated_at DESC);
+
+-- One row per question and its answer. Sources are a snapshot, so history still
+-- reads correctly after the document behind them is deleted.
+CREATE TABLE IF NOT EXISTS messages (
+    id               BIGSERIAL PRIMARY KEY,
+    conversation_id  BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    question         TEXT NOT NULL,
+    answer           TEXT NOT NULL,
+    answered         BOOLEAN NOT NULL,
+    sources          JSONB NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS messages_conversation_id_idx ON messages (conversation_id, id);
 """
+
+TITLE_CHARS = 80
 
 Status = Literal["processing", "ready", "failed"]
 
@@ -68,6 +96,21 @@ class SearchResult:
     chunk_index: int
     content: str
     score: float
+
+
+@dataclass(frozen=True)
+class Conversation:
+    id: int
+    title: str
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class Message:
+    question: str
+    answer: str
+    answered: bool
+    sources: list[dict]
 
 
 def _vector_literal(v: list[float]) -> str:
@@ -202,6 +245,73 @@ class VectorStore:
             {"q": _vector_literal(query_vector), "user_id": user_id, "k": k},
         ).fetchall()
         return [SearchResult(*r) for r in rows]
+
+    def conversation_exists(self, user_id: str, conversation_id: int) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM conversations WHERE id = %s AND user_id = %s",
+            (conversation_id, user_id),
+        ).fetchone()
+        return row is not None
+
+    def save_turn(
+        self,
+        user_id: str,
+        conversation_id: int | None,
+        question: str,
+        answer: str,
+        answered: bool,
+        sources: list[dict],
+    ) -> int:
+        """Saves one question and answer; with no conversation_id, starts a new conversation."""
+        with self.conn.transaction():
+            if conversation_id is None:
+                conversation_id = self.conn.execute(
+                    "INSERT INTO conversations (user_id, title) VALUES (%s, %s) RETURNING id",
+                    (user_id, question[:TITLE_CHARS]),
+                ).fetchone()[0]
+            else:
+                # The user filter means another user's id updates nothing instead of joining their conversation.
+                row = self.conn.execute(
+                    "UPDATE conversations SET updated_at = now() WHERE id = %s AND user_id = %s RETURNING id",
+                    (conversation_id, user_id),
+                ).fetchone()
+                if row is None:
+                    raise LookupError(f"conversation {conversation_id} not found")
+            self.conn.execute(
+                "INSERT INTO messages (conversation_id, question, answer, answered, sources) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (conversation_id, question, answer, answered, Jsonb(sources)),
+            )
+        return conversation_id
+
+    def list_conversations(self, user_id: str) -> list[Conversation]:
+        # shortcut: returns every conversation, add paging if a user ever has hundreds.
+        rows = self.conn.execute(
+            "SELECT id, title, updated_at FROM conversations WHERE user_id = %s ORDER BY updated_at DESC, id DESC",
+            (user_id,),
+        ).fetchall()
+        return [Conversation(*r) for r in rows]
+
+    def get_conversation(self, user_id: str, conversation_id: int) -> tuple[Conversation, list[Message]] | None:
+        row = self.conn.execute(
+            "SELECT id, title, updated_at FROM conversations WHERE id = %s AND user_id = %s",
+            (conversation_id, user_id),
+        ).fetchone()
+        if row is None:
+            return None
+        messages = self.conn.execute(
+            "SELECT question, answer, answered, sources FROM messages WHERE conversation_id = %s ORDER BY id",
+            (conversation_id,),
+        ).fetchall()
+        return Conversation(*row), [Message(*m) for m in messages]
+
+    def delete_conversation(self, user_id: str, conversation_id: int) -> bool:
+        # Messages go with it via ON DELETE CASCADE.
+        cur = self.conn.execute(
+            "DELETE FROM conversations WHERE id = %s AND user_id = %s",
+            (conversation_id, user_id),
+        )
+        return cur.rowcount == 1
 
     def _insert_document(
         self, user_id: str, filename: str, sha256: str, pages: int, status: Status
