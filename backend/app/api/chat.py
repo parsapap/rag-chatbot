@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from google.genai import errors
 
 from app.api.deps import CurrentUser, Rag
-from app.core.messages import NO_ANSWER
+from app.core.messages import is_no_answer, no_answer
 from app.db.store import SearchResult
 from app.schemas.chat import ChatRequest, ChatResponse, RetrievedSource, SourceOut
 from app.services.rag import cited_numbers
@@ -40,7 +40,7 @@ def chat(body: ChatRequest, user_id: CurrentUser, rag: Rag) -> ChatResponse:
 
     return ChatResponse(
         answer=answer.text,
-        answered=answer.text != NO_ANSWER,
+        answered=not is_no_answer(answer.text),
         sources=[
             SourceOut(**s.model_dump(), cited=s.number in answer.cited)
             for s in _retrieved(answer.sources)
@@ -53,7 +53,7 @@ def _event(name: str, data: object) -> str:
     return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _sse(results: list[SearchResult], pieces: Iterator[str]) -> Iterator[str]:
+def _sse(results: list[SearchResult], pieces: Iterator[str], fallback: str) -> Iterator[str]:
     yield _event("sources", [s.model_dump() for s in _retrieved(results)])
     parts: list[str] = []
     try:
@@ -68,9 +68,9 @@ def _sse(results: list[SearchResult], pieces: Iterator[str]) -> Iterator[str]:
 
     text = "".join(parts).strip()
     if not text:
-        text = NO_ANSWER
+        text = fallback
         yield _event("delta", {"text": text})
-    yield _event("done", {"answered": text != NO_ANSWER, "cited": cited_numbers(text, len(results))})
+    yield _event("done", {"answered": not is_no_answer(text), "cited": cited_numbers(text, len(results))})
 
 
 @router.post("/stream")
@@ -81,7 +81,7 @@ def chat_stream(body: ChatRequest, user_id: CurrentUser, rag: Rag) -> StreamingR
     except errors.APIError as e:
         raise HTTPException(*_error_info(e)) from e
     return StreamingResponse(
-        _sse(results, pieces),
+        _sse(results, pieces, no_answer(body.question)),
         media_type="text/event-stream",
         # no-buffering: proxies would otherwise hold the pieces until the end.
         # no-transform: stops proxies (the Next.js dev server too) from gzipping, which buffers the whole stream.

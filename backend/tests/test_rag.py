@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
-from app.services.rag import NO_ANSWER, RAG, SYSTEM_PROMPT, build_prompt, cited_numbers
+from app.core.messages import NO_ANSWER
+from app.services.rag import RAG, SYSTEM_PROMPT, build_prompt, cited_numbers
 from app.db.store import SearchResult
 
 
@@ -44,7 +45,8 @@ def test_prompt_numbers_sources_and_keeps_question():
     prompt = build_prompt("سؤال من؟", [_result("a.pdf", 2, "متن الف"), _result("b.pdf", 7, "متن ب")])
     assert '<source id="1" file="a.pdf" page="2">\nمتن الف\n</source>' in prompt
     assert '<source id="2" file="b.pdf" page="7">' in prompt
-    assert prompt.endswith("Question: سؤال من؟")
+    assert "Question: سؤال من؟\n\n" in prompt
+    assert prompt.endswith(NO_ANSWER["fa"])
 
 
 def test_source_text_cannot_close_tag_early():
@@ -59,7 +61,7 @@ def test_cited_numbers_drop_out_of_range():
 def test_no_documents_skips_llm():
     rag, _, models = _rag([])
     answer = rag.ask("u", "سؤال")
-    assert answer.text == NO_ANSWER
+    assert answer.text == NO_ANSWER["fa"]
     assert models.calls == []
 
 
@@ -75,4 +77,9 @@ def test_ask_searches_only_that_user_and_sends_system_prompt():
 
 def test_empty_model_reply_becomes_no_answer():
     rag, _, _ = _rag([_result("a.pdf", 1, "متن")], reply=None)
-    assert rag.ask("u", "سؤال").text == NO_ANSWER
+    assert rag.ask("u", "سؤال").text == NO_ANSWER["fa"]
+
+
+def test_prompt_gives_english_no_answer_for_english_question():
+    prompt = build_prompt("What is it?", [_result("a.pdf", 1, "متن")])
+    assert prompt.endswith(NO_ANSWER["en"])

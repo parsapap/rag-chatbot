@@ -87,12 +87,12 @@ def test_answer_with_numbered_sources(client):
 
 def test_user_without_documents_gets_no_answer_and_no_llm_call(client):
     body = _ask(client, "bob", {"question": "فیدیبو آرت چیست؟"}).json()
-    assert body == {"answer": NO_ANSWER, "answered": False, "sources": []}
+    assert body == {"answer": NO_ANSWER["fa"], "answered": False, "sources": []}
     assert client.models.calls == 0
 
 
 def test_model_no_answer_is_flagged(client):
-    client.models.reply = NO_ANSWER
+    client.models.reply = NO_ANSWER["fa"]
     body = _ask(client, "alice", {"question": "پایتخت فرانسه کجاست؟"}).json()
     assert body["answered"] is False
     assert not any(s["cited"] for s in body["sources"])
@@ -158,7 +158,7 @@ def test_stream_user_without_documents(client):
     events = _events(client, "bob", {"question": "q"})
     assert events == [
         ("sources", []),
-        ("delta", {"text": NO_ANSWER}),
+        ("delta", {"text": NO_ANSWER["en"]}),
         ("done", {"answered": False, "cited": []}),
     ]
     assert client.models.calls == 0
@@ -176,3 +176,15 @@ def test_stream_model_error_is_sent_as_event(client):
 def test_stream_invalid_request_rejected(client):
     r = client.post("/chat/stream", headers={"X-User-Id": "alice"}, json={"question": " "})
     assert r.status_code == 422
+
+
+def test_english_question_gets_english_no_answer(client):
+    body = _ask(client, "bob", {"question": "What is Fidibo Art?"}).json()
+    assert body["answer"] == NO_ANSWER["en"]
+    assert body["answered"] is False
+
+
+def test_model_answering_in_the_other_language_is_still_flagged(client):
+    client.models.reply = NO_ANSWER["en"]
+    body = _ask(client, "alice", {"question": "پایتخت فرانسه کجاست؟"}).json()
+    assert body["answered"] is False
