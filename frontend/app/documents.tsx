@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type Doc } from "./api-client";
 
 const POLL_MS = 2000;
@@ -13,7 +13,7 @@ const STATUS = {
   failed: { glyph: "✕", className: "text-destructive" },
 } as const;
 
-export default function Documents({ userId, onUserChange }: { userId: string; onUserChange: (id: string) => void }) {
+export default function Documents({ email, onLogout }: { email: string; onLogout: () => void }) {
   const [docs, setDocs] = useState<Doc[] | null>(null);
   const [version, setVersion] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -23,13 +23,13 @@ export default function Documents({ userId, onUserChange }: { userId: string; on
 
   useEffect(() => {
     let live = true;
-    api<Doc[]>(userId, "/documents")
+    api<Doc[]>("/documents")
       .then((d) => live && setDocs(d))
       .catch((e: Error) => live && setMessage(e.message));
     return () => {
       live = false;
     };
-  }, [userId, version]);
+  }, [version]);
 
   // Embedding runs in the background on the API, so poll until nothing is processing.
   useEffect(() => {
@@ -38,15 +38,6 @@ export default function Documents({ userId, onUserChange }: { userId: string; on
     return () => clearTimeout(t);
   }, [docs]);
 
-  function switchUser(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const next = String(new FormData(e.currentTarget).get("user"));
-    if (next === userId) return;
-    onUserChange(next);
-    setDocs(null);
-    setMessage(null);
-  }
-
   async function upload(file: File | undefined) {
     if (!file || busy) return;
     setBusy(true);
@@ -54,7 +45,7 @@ export default function Documents({ userId, onUserChange }: { userId: string; on
     const form = new FormData();
     form.append("file", file);
     try {
-      await api(userId, "/documents", { method: "POST", body: form });
+      await api("/documents", { method: "POST", body: form });
       reload();
     } catch (e) {
       setMessage((e as Error).message);
@@ -67,7 +58,7 @@ export default function Documents({ userId, onUserChange }: { userId: string; on
     if (!confirm(`Delete ${doc.filename}? Its chunks are removed too.`)) return;
     setMessage(null);
     try {
-      await api(userId, `/documents/${doc.id}`, { method: "DELETE" });
+      await api(`/documents/${doc.id}`, { method: "DELETE" });
       reload();
     } catch (e) {
       setMessage((e as Error).message);
@@ -78,19 +69,14 @@ export default function Documents({ userId, onUserChange }: { userId: string; on
     <aside className="flex flex-col gap-4 border-b border-border p-5 lg:border-b-0">
       <div className="flex items-baseline justify-between gap-3 border-b border-border pb-3">
         <h2 className="font-medium">Documents</h2>
-        <form onSubmit={switchUser}>
-          <label className="font-mono text-xs text-muted-foreground">
-            user{" "}
-            <input
-              name="user"
-              defaultValue={userId}
-              required
-              pattern="[A-Za-z0-9_\-]{1,64}"
-              title="Letters, digits, _ or -. Press Enter to switch."
-              className="w-24 border border-input bg-transparent px-1.5 py-0.5 text-foreground"
-            />
-          </label>
-        </form>
+        <span className="flex min-w-0 items-baseline gap-2 font-mono text-xs text-muted-foreground">
+          <span title={email} className="min-w-0 truncate">
+            {email}
+          </span>
+          <button type="button" onClick={onLogout} className="shrink-0 hover:text-foreground">
+            log out
+          </button>
+        </span>
       </div>
 
       <label

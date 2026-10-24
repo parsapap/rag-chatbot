@@ -6,21 +6,20 @@ import { api } from "./api-client";
 type Conversation = { id: number; title: string; updated_at: string };
 
 type Props = {
-  userId: string;
   activeId: number | null;
   version: number;
   onOpen: (id: number) => void;
   onNew: () => void;
 };
 
-export default function Conversations({ userId, activeId, version, onOpen, onNew }: Props) {
+export default function Conversations({ activeId, version, onOpen, onNew }: Props) {
   const [items, setItems] = useState<Conversation[] | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
 
   useEffect(() => {
     let live = true;
-    api<Conversation[]>(userId, "/conversations")
+    api<Conversation[]>("/conversations")
       .then((c) => {
         if (!live) return;
         setItems(c);
@@ -30,12 +29,12 @@ export default function Conversations({ userId, activeId, version, onOpen, onNew
     return () => {
       live = false;
     };
-  }, [userId, version, reloads]);
+  }, [version, reloads]);
 
   async function remove(c: Conversation) {
     if (!confirm(`Delete the conversation "${c.title}"?`)) return;
     try {
-      await api(userId, `/conversations/${c.id}`, { method: "DELETE" });
+      await api(`/conversations/${c.id}`, { method: "DELETE" });
       if (c.id === activeId) onNew();
       setReloads((v) => v + 1);
     } catch (e) {

@@ -23,9 +23,9 @@ const toTurn = (m: SavedMessage): Turn => ({
   error: null,
 });
 
-type Props = { userId: string; conversationId: number | null; onSaved: (id: number) => void };
+type Props = { conversationId: number | null; onSaved: (id: number) => void };
 
-export default function Chat({ userId, conversationId, onSaved }: Props) {
+export default function Chat({ conversationId, onSaved }: Props) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [loading, setLoading] = useState(conversationId !== null);
@@ -41,14 +41,14 @@ export default function Chat({ userId, conversationId, onSaved }: Props) {
   useEffect(() => {
     if (conversationId === null) return;
     let live = true;
-    api<{ messages: SavedMessage[] }>(userId, `/conversations/${conversationId}`)
+    api<{ messages: SavedMessage[] }>(`/conversations/${conversationId}`)
       .then((c) => live && setTurns(c.messages.map(toTurn)))
       .catch((e: Error) => live && setLoadError(e.message))
       .finally(() => live && setLoading(false));
     return () => {
       live = false;
     };
-  }, [userId, conversationId]);
+  }, [conversationId]);
   useEffect(() => {
     if (turns.length) end.current?.scrollIntoView({ block: "end" });
   }, [turns.length]);
@@ -69,7 +69,7 @@ export default function Chat({ userId, conversationId, onSaved }: Props) {
     abort.current = controller;
     let finished = false;
     try {
-      const res = await request(userId, "/chat/stream", {
+      const res = await request("/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question, conversation_id: convId.current }),
