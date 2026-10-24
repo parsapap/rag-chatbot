@@ -5,7 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 from google.genai import errors
 
-from app.api.deps import get_rag, get_store
+from app.api.deps import get_current_user, get_rag, get_store
+from conftest import header_user
 from app.core.messages import NO_ANSWER
 from app.main import app
 from app.services.chunking import Chunk
@@ -61,6 +62,7 @@ def client(store):
     )
     models = FakeModels()
     app.dependency_overrides[get_store] = lambda: store
+    app.dependency_overrides[get_current_user] = header_user
     app.dependency_overrides[get_rag] = lambda: RAG(
         store, FakeEmbedder(), client=SimpleNamespace(models=models)
     )

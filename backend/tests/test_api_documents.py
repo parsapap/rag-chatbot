@@ -3,7 +3,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import documents
-from app.api.deps import get_store
+from app.api.deps import get_current_user, get_store
+from conftest import header_user
 from app.main import app
 from app.services import ingestion
 from app.services.embeddings import DIM
@@ -31,6 +32,7 @@ def client(store, monkeypatch):
         ),
     )
     app.dependency_overrides[get_store] = lambda: store
+    app.dependency_overrides[get_current_user] = header_user
     # Not used as a context manager, so the lifespan (which touches the real DB) doesn't run.
     c = TestClient(app)
     c.embedder = embedder
@@ -75,11 +77,6 @@ def test_upload_pdf_keeps_pages(client):
 def test_missing_user_header_rejected(client):
     r = client.post("/documents", files={"file": ("a.txt", TEXT)})
     assert r.status_code == 422
-
-
-def test_invalid_user_id_rejected(client):
-    r = _upload(client, "../etc", "a.txt", TEXT)
-    assert r.status_code == 400
 
 
 def test_unsupported_extension_rejected(client):

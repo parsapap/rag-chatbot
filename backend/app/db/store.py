@@ -63,6 +63,14 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS messages_conversation_id_idx ON messages (conversation_id, id);
+
+-- Other tables store str(users.id) in their user_id column.
+CREATE TABLE IF NOT EXISTS users (
+    id             BIGSERIAL PRIMARY KEY,
+    email          TEXT NOT NULL UNIQUE,
+    password_hash  TEXT NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 TITLE_CHARS = 80
@@ -96,6 +104,12 @@ class SearchResult:
     chunk_index: int
     content: str
     score: float
+
+
+@dataclass(frozen=True)
+class User:
+    id: int
+    email: str
 
 
 @dataclass(frozen=True)
@@ -245,6 +259,25 @@ class VectorStore:
             {"q": _vector_literal(query_vector), "user_id": user_id, "k": k},
         ).fetchall()
         return [SearchResult(*r) for r in rows]
+
+    def create_user(self, email: str, password_hash: str) -> User | None:
+        # None when the email is taken; ON CONFLICT also covers two sign-ups racing.
+        row = self.conn.execute(
+            "INSERT INTO users (email, password_hash) VALUES (%s, %s) "
+            "ON CONFLICT (email) DO NOTHING RETURNING id, email",
+            (email, password_hash),
+        ).fetchone()
+        return User(*row) if row else None
+
+    def find_login(self, email: str) -> tuple[User, str] | None:
+        row = self.conn.execute(
+            "SELECT id, email, password_hash FROM users WHERE email = %s", (email,)
+        ).fetchone()
+        return (User(row[0], row[1]), row[2]) if row else None
+
+    def get_user(self, user_id: int) -> User | None:
+        row = self.conn.execute("SELECT id, email FROM users WHERE id = %s", (user_id,)).fetchone()
+        return User(*row) if row else None
 
     def conversation_exists(self, user_id: str, conversation_id: int) -> bool:
         row = self.conn.execute(

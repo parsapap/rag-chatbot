@@ -1,10 +1,17 @@
 import os
 import uuid
+from typing import Annotated
 
 import psycopg
 import pytest
+from fastapi import Header
 
 from app.db.store import VectorStore
+
+
+def header_user(x_user_id: Annotated[str, Header()]) -> str:
+    # Stands in for the session cookie in API tests; test_api_auth.py covers the real cookie.
+    return x_user_id
 
 
 @pytest.fixture

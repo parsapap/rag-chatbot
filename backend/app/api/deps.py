@@ -1,22 +1,20 @@
-import re
 from collections.abc import Iterator
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Cookie, Depends, HTTPException
 
+from app.core.security import read_token
 from app.db.store import VectorStore
 from app.services.embeddings import Embedder
 from app.services.rag import RAG
 
-_USER_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
-
-def get_current_user(x_user_id: Annotated[str, Header()]) -> str:
-    # TEMPORARY until real auth: trusts whichever user the client claims to be.
-    # Only safe while the API is reachable from this machine alone.
-    if not _USER_ID.fullmatch(x_user_id):
-        raise HTTPException(status_code=400, detail="invalid X-User-Id")
-    return x_user_id
+def get_current_user(session: Annotated[str | None, Cookie()] = None) -> str:
+    # Returned as text because every table keys rows by a TEXT user_id.
+    user_id = read_token(session) if session else None
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Log in first.")
+    return str(user_id)
 
 
 def get_store() -> Iterator[VectorStore]:
