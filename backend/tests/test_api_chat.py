@@ -11,7 +11,7 @@ from app.core.messages import NO_ANSWER
 from app.main import app
 from app.services.chunking import Chunk
 from app.services.embeddings import DIM
-from app.services.rag import RAG
+from app.services.rag import REWRITE_SYSTEM_PROMPT, RAG
 
 
 def _vec(i: int) -> list[float]:
@@ -21,7 +21,11 @@ def _vec(i: int) -> list[float]:
 
 
 class FakeEmbedder:
+    def __init__(self):
+        self.queries = []
+
     def embed_query(self, text):
+        self.queries.append(text)
         return _vec(0)
 
 
@@ -30,8 +34,18 @@ class FakeModels:
         self.calls = 0
         self.reply = "فیدیبو آرت از سال 1403 شروع شد [1]."
         self.error: Exception | None = None
+        self.rewrite_reply = "فیدیبو آرت از چه سالی شروع شد؟"
+        self.rewrite_error: Exception | None = None
+        self.rewrites = 0
+        self.prompts: list[str] = []
 
     def generate_content(self, model, contents, config):
+        if config.system_instruction == REWRITE_SYSTEM_PROMPT:
+            self.rewrites += 1
+            if self.rewrite_error:
+                raise self.rewrite_error
+            return SimpleNamespace(text=self.rewrite_reply)
+        self.prompts.append(contents)
         self.calls += 1
         if self.error:
             raise self.error
@@ -61,13 +75,15 @@ def client(store):
         [_vec(0), _vec(1)],
     )
     models = FakeModels()
+    embedder = FakeEmbedder()
     app.dependency_overrides[get_store] = lambda: store
     app.dependency_overrides[get_current_user] = header_user
     app.dependency_overrides[get_rag] = lambda: RAG(
-        store, FakeEmbedder(), client=SimpleNamespace(models=models)
+        store, embedder, client=SimpleNamespace(models=models)
     )
     c = TestClient(app)
     c.models = models
+    c.embedder = embedder
     yield c
     app.dependency_overrides.clear()
 
@@ -264,3 +280,65 @@ def test_most_recent_conversation_is_listed_first(client):
     assert [c["id"] for c in _conversations(client, "alice")] == [b, a]
     _ask(client, "alice", {"question": "ادامه", "conversation_id": a})
     assert [c["id"] for c in _conversations(client, "alice")] == [a, b]
+
+
+QUOTA = errors.ClientError(429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}})
+FOLLOW_UP = "از کی شروع شد؟"
+
+
+def _first_turn(client):
+    return _ask(client, "alice", {"question": "فیدیبو آرت چیست؟"}).json()["conversation_id"]
+
+
+def test_first_question_is_not_rewritten(client):
+    _first_turn(client)
+    assert client.models.rewrites == 0
+    assert client.embedder.queries == ["فیدیبو آرت چیست؟"]
+
+
+def test_follow_up_is_searched_with_the_rewritten_question(client):
+    cid = _first_turn(client)
+    body = _ask(client, "alice", {"question": FOLLOW_UP, "conversation_id": cid}).json()
+    assert client.models.rewrites == 1
+    assert client.embedder.queries[-1] == client.models.rewrite_reply
+    assert body["search_query"] == client.models.rewrite_reply
+    assert "Question: " + client.models.rewrite_reply in client.models.prompts[-1]
+
+    detail = client.get(f"/conversations/{cid}", headers={"X-User-Id": "alice"}).json()
+    first, second = detail["messages"]
+    assert (first["search_query"], second["search_query"]) == (None, client.models.rewrite_reply)
+    assert second["question"] == FOLLOW_UP
+
+
+def test_rewrite_error_falls_back_to_the_typed_question(client):
+    cid = _first_turn(client)
+    client.models.rewrite_error = QUOTA
+    r = _ask(client, "alice", {"question": FOLLOW_UP, "conversation_id": cid})
+    assert r.status_code == 200
+    assert r.json()["search_query"] is None
+    assert client.embedder.queries[-1] == FOLLOW_UP
+
+
+def test_answer_language_follows_the_typed_question_not_the_rewrite(client):
+    cid = _first_turn(client)
+    body = {"question": "When did it start?", "conversation_id": cid}
+    _ask(client, "alice", body)
+    assert "Write the answer in English" in client.models.prompts[-1]
+    assert client.models.rewrite_reply in client.models.prompts[-1]
+
+
+def test_stream_sends_the_rewrite_for_a_follow_up_only(client):
+    first = _events(client, "alice", {"question": "فیدیبو آرت چیست؟"})
+    assert "rewrite" not in [n for n, _ in first]
+    cid = first[-1][1]["conversation_id"]
+    events = _events(client, "alice", {"question": FOLLOW_UP, "conversation_id": cid})
+    assert [n for n, _ in events][:2] == ["sources", "rewrite"]
+    assert events[1][1] == {"search_query": client.models.rewrite_reply}
+    assert client.embedder.queries[-1] == client.models.rewrite_reply
+
+
+def test_other_users_conversation_is_never_rewritten(client):
+    cid = _first_turn(client)
+    r = client.post("/chat", headers={"X-User-Id": "bob"}, json={"question": FOLLOW_UP, "conversation_id": cid})
+    assert r.status_code == 404
+    assert client.models.rewrites == 0

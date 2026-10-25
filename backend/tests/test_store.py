@@ -68,3 +68,12 @@ def test_chunk_vector_count_mismatch_saves_nothing(store):
     with pytest.raises(ValueError):
         store.add_document("a", "bad.pdf", "h", 1, _chunks("bad.pdf", 2), [_vec(0)])
     assert store.list_documents("a") == []
+
+
+def test_recent_turns_are_oldest_first_limited_and_private(store):
+    cid = store.save_turn("a", None, "q1", "a1", True, [])
+    store.save_turn("a", cid, "q2", "a2", True, [])
+    store.save_turn("a", cid, "q3", "a3", True, [], "q3 rewritten")
+    assert store.recent_turns("a", cid, 2) == [("q2", "a2"), ("q3", "a3")]
+    assert store.recent_turns("b", cid, 2) == []
+    assert store.get_conversation("a", cid)[1][-1].search_query == "q3 rewritten"

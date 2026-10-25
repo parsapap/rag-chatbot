@@ -64,6 +64,9 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS messages_conversation_id_idx ON messages (conversation_id, id);
 
+-- The rewritten question that was searched, for a follow-up; NULL when the user's own words were used.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS search_query TEXT;
+
 -- Other tables store str(users.id) in their user_id column.
 CREATE TABLE IF NOT EXISTS users (
     id             BIGSERIAL PRIMARY KEY,
@@ -133,6 +136,7 @@ class Message:
     answer: str
     answered: bool
     sources: list[dict]
+    search_query: str | None
 
 
 def _vector_literal(v: list[float]) -> str:
@@ -321,6 +325,7 @@ class VectorStore:
         answer: str,
         answered: bool,
         sources: list[dict],
+        search_query: str | None = None,
     ) -> int:
         """Saves one question and answer; with no conversation_id, starts a new conversation."""
         with self.conn.transaction():
@@ -338,9 +343,9 @@ class VectorStore:
                 if row is None:
                     raise LookupError(f"conversation {conversation_id} not found")
             self.conn.execute(
-                "INSERT INTO messages (conversation_id, question, answer, answered, sources) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (conversation_id, question, answer, answered, Jsonb(sources)),
+                "INSERT INTO messages (conversation_id, question, answer, answered, sources, search_query) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (conversation_id, question, answer, answered, Jsonb(sources), search_query),
             )
         return conversation_id
 
@@ -360,10 +365,24 @@ class VectorStore:
         if row is None:
             return None
         messages = self.conn.execute(
-            "SELECT question, answer, answered, sources FROM messages WHERE conversation_id = %s ORDER BY id",
+            "SELECT question, answer, answered, sources, search_query FROM messages "
+            "WHERE conversation_id = %s ORDER BY id",
             (conversation_id,),
         ).fetchall()
         return Conversation(*row), [Message(*m) for m in messages]
+
+    def recent_turns(self, user_id: str, conversation_id: int, limit: int) -> list[tuple[str, str]]:
+        """The last `limit` (question, answer) pairs, oldest first; empty for another user's conversation."""
+        rows = self.conn.execute(
+            """
+            SELECT m.question, m.answer
+            FROM messages m JOIN conversations c ON c.id = m.conversation_id
+            WHERE c.id = %s AND c.user_id = %s
+            ORDER BY m.id DESC LIMIT %s
+            """,
+            (conversation_id, user_id, limit),
+        ).fetchall()
+        return [(q, a) for q, a in reversed(rows)]
 
     def delete_conversation(self, user_id: str, conversation_id: int) -> bool:
         # Messages go with it via ON DELETE CASCADE.

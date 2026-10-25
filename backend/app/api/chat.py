@@ -10,7 +10,7 @@ from app.api.deps import CurrentUser, Rag, Store
 from app.core.messages import is_no_answer, no_answer
 from app.db.store import SearchResult, VectorStore
 from app.schemas.chat import ChatRequest, ChatResponse, RetrievedSource, SourceOut
-from app.services.rag import cited_numbers
+from app.services.rag import HISTORY_TURNS, History, cited_numbers
 
 log = logging.getLogger(__name__)
 
@@ -44,10 +44,21 @@ def _check_conversation(store: VectorStore, user_id: str, body: ChatRequest) -> 
         raise HTTPException(404, "conversation not found")
 
 
-def _saver(store: VectorStore, user_id: str, body: ChatRequest, results: list[SearchResult]) -> Save:
+def _history(store: VectorStore, user_id: str, body: ChatRequest) -> History:
+    # Only runs after _check_conversation; recent_turns filters by user_id again on its own.
+    if body.conversation_id is None:
+        return []
+    return store.recent_turns(user_id, body.conversation_id, HISTORY_TURNS)
+
+
+def _saver(
+    store: VectorStore, user_id: str, body: ChatRequest, results: list[SearchResult], search_query: str | None
+) -> Save:
     def save(text: str, answered: bool, cited: list[int]) -> int:
         sources = [s.model_dump() for s in _sources_out(results, cited)]
-        return store.save_turn(user_id, body.conversation_id, body.question, text, answered, sources)
+        return store.save_turn(
+            user_id, body.conversation_id, body.question, text, answered, sources, search_query
+        )
 
     return save
 
@@ -56,13 +67,14 @@ def _saver(store: VectorStore, user_id: str, body: ChatRequest, results: list[Se
 def chat(body: ChatRequest, user_id: CurrentUser, store: Store, rag: Rag) -> ChatResponse:
     _check_conversation(store, user_id, body)
     try:
-        answer = rag.ask(user_id, body.question, k=body.k)
+        answer = rag.ask(user_id, body.question, k=body.k, history=_history(store, user_id, body))
     except errors.APIError as e:
         raise HTTPException(*_error_info(e)) from e
 
     answered = not is_no_answer(answer.text)
     try:
-        conversation_id = _saver(store, user_id, body, answer.sources)(answer.text, answered, answer.cited)
+        save = _saver(store, user_id, body, answer.sources, answer.search_query)
+        conversation_id = save(answer.text, answered, answer.cited)
     except LookupError as e:
         # Deleted while the model was answering.
         raise HTTPException(404, "conversation not found") from e
@@ -71,6 +83,7 @@ def chat(body: ChatRequest, user_id: CurrentUser, store: Store, rag: Rag) -> Cha
         answered=answered,
         sources=_sources_out(answer.sources, answer.cited),
         conversation_id=conversation_id,
+        search_query=answer.search_query,
     )
 
 
@@ -79,8 +92,12 @@ def _event(name: str, data: object) -> str:
     return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _sse(results: list[SearchResult], pieces: Iterator[str], fallback: str, save: Save) -> Iterator[str]:
+def _sse(
+    results: list[SearchResult], pieces: Iterator[str], fallback: str, save: Save, search_query: str | None
+) -> Iterator[str]:
     yield _event("sources", [s.model_dump() for s in _retrieved(results)])
+    if search_query:
+        yield _event("rewrite", {"search_query": search_query})
     parts: list[str] = []
     try:
         for piece in pieces:
@@ -109,14 +126,22 @@ def _sse(results: list[SearchResult], pieces: Iterator[str], fallback: str, save
 
 @router.post("/stream")
 def chat_stream(body: ChatRequest, user_id: CurrentUser, store: Store, rag: Rag) -> StreamingResponse:
-    """Server-sent events: `sources`, then `delta` pieces, then `done` (or `error`)."""
+    """Server-sent events: `sources`, `rewrite` (follow-ups only), `delta` pieces, then `done` (or `error`)."""
     _check_conversation(store, user_id, body)
     try:
-        results, pieces = rag.stream(user_id, body.question, k=body.k)
+        results, pieces, search_query = rag.stream(
+            user_id, body.question, k=body.k, history=_history(store, user_id, body)
+        )
     except errors.APIError as e:
         raise HTTPException(*_error_info(e)) from e
     return StreamingResponse(
-        _sse(results, pieces, no_answer(body.question), _saver(store, user_id, body, results)),
+        _sse(
+            results,
+            pieces,
+            no_answer(body.question),
+            _saver(store, user_id, body, results, search_query),
+            search_query,
+        ),
         media_type="text/event-stream",
         # no-buffering: proxies would otherwise hold the pieces until the end.
         # no-transform: stops proxies (the Next.js dev server too) from gzipping, which buffers the whole stream.

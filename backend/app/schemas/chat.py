@@ -31,3 +31,5 @@ class ChatResponse(BaseModel):
     answered: bool  # False when the documents had no answer
     sources: list[SourceOut]
     conversation_id: int
+    # The rewritten question that was searched, for a follow-up; None when the typed question was used.
+    search_query: str | None = None

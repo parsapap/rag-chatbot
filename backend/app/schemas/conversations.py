@@ -16,6 +16,7 @@ class MessageOut(BaseModel):
     answer: str
     answered: bool
     sources: list[SourceOut]
+    search_query: str | None = None
 
 
 class ConversationDetail(ConversationOut):
