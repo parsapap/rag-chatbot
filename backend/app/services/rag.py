@@ -86,6 +86,14 @@ def build_rewrite_prompt(question: str, history: History) -> str:
     return "<conversation>\n" + "\n".join(turns) + f"\n</conversation>\n\nLatest question: {question}"
 
 
+_PUNCTUATION = re.compile(r"[\s?؟.!،,:;«»\"'“”]+")
+
+
+def _same_question(a: str, b: str) -> bool:
+    # "میاره چیست" and "میاره چیست؟" are the same question; only real changes count as a rewrite.
+    return _PUNCTUATION.sub("", a) == _PUNCTUATION.sub("", b)
+
+
 def _clean_rewrite(text: str | None) -> str:
     lines = (text or "").strip().splitlines()
     return lines[0].strip(" \"'«»“”")[:MAX_REWRITE_CHARS] if lines else ""
@@ -126,7 +134,7 @@ class RAG:
             log.warning("question rewrite failed (%s %s), searching with the typed question", e.code, e.status)
             return None
         rewritten = _clean_rewrite(response.text)
-        return rewritten if rewritten and rewritten != question else None
+        return rewritten if rewritten and not _same_question(rewritten, question) else None
 
     def retrieve(self, user_id: str, query: str, k: int | None = None) -> list[SearchResult]:
         return self.store.search(user_id, self.embedder.embed_query(query), k or self.k)
