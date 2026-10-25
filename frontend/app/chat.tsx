@@ -8,15 +8,24 @@ import { plural } from "./documents";
 type Source = { number: number; filename: string; page: number; score: number; content: string };
 type Turn = {
   question: string;
+  // The standalone question the server searched with; null when it used the typed one.
+  searchQuery: string | null;
   sources: Source[];
   text: string;
   done: { answered: boolean; cited: number[] } | null;
   error: string | null;
 };
-type SavedMessage = { question: string; answer: string; answered: boolean; sources: (Source & { cited: boolean })[] };
+type SavedMessage = {
+  question: string;
+  answer: string;
+  answered: boolean;
+  sources: (Source & { cited: boolean })[];
+  search_query: string | null;
+};
 
 const toTurn = (m: SavedMessage): Turn => ({
   question: m.question,
+  searchQuery: m.search_query,
   text: m.answer,
   sources: m.sources,
   done: { answered: m.answered, cited: m.sources.filter((s) => s.cited).map((s) => s.number) },
@@ -62,7 +71,7 @@ export default function Chat({ conversationId, onSaved }: Props) {
     const question = String(new FormData(form).get("question")).trim();
     if (!question || streaming) return;
     form.reset();
-    setTurns((ts) => [...ts, { question, sources: [], text: "", done: null, error: null }]);
+    setTurns((ts) => [...ts, { question, searchQuery: null, sources: [], text: "", done: null, error: null }]);
     setSelected(null);
     setStreaming(true);
     const controller = new AbortController();
@@ -84,6 +93,8 @@ export default function Chat({ conversationId, onSaved }: Props) {
         buffer = parsed.rest;
         for (const { event, data } of parsed.events) {
           if (event === "sources") updateLast(() => ({ sources: data as Source[] }));
+          else if (event === "rewrite")
+            updateLast(() => ({ searchQuery: (data as { search_query: string }).search_query }));
           else if (event === "delta") updateLast((t) => ({ text: t.text + (data as { text: string }).text }));
           else if (event === "done") {
             finished = true;
@@ -129,9 +140,17 @@ export default function Chat({ conversationId, onSaved }: Props) {
           )}
           {turns.map((t, i) => (
             <article key={i} aria-busy={streaming && i === turns.length - 1} className="flex flex-col gap-3">
-              <p dir="auto" className="border-s-2 border-foreground ps-3.5 font-medium">
-                {t.question}
-              </p>
+              {/* dir="auto" takes the question's direction, so the bar sits on its reading side. */}
+              <div dir="auto" className="border-s-2 border-foreground ps-3.5">
+                <p className="font-medium">{t.question}</p>
+                {t.searchQuery && (
+                  // Label on its own line: inline with a Persian query, the mixed directions jumble the order.
+                  <div className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                    <p className="font-mono">searched for</p>
+                    <p dir="auto">{t.searchQuery}</p>
+                  </div>
+                )}
+              </div>
               {t.text ? (
                 <p
                   dir="auto"
