@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 import psycopg
@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS users (
     email          TEXT NOT NULL UNIQUE,
     password_hash  TEXT NOT NULL,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Login attempts per email in a fixed window. Unknown emails get rows too, so a lockout
+-- does not reveal which emails are registered.
+CREATE TABLE IF NOT EXISTS login_attempts (
+    email         TEXT PRIMARY KEY,
+    attempts      INT NOT NULL,
+    window_start  TIMESTAMPTZ NOT NULL
 );
 """
 
@@ -278,6 +286,25 @@ class VectorStore:
     def get_user(self, user_id: int) -> User | None:
         row = self.conn.execute("SELECT id, email FROM users WHERE id = %s", (user_id,)).fetchone()
         return User(*row) if row else None
+
+    def record_login_attempt(self, email: str, window: timedelta) -> tuple[int, float]:
+        """Counts one attempt; returns (attempts in the current window, seconds until it ends)."""
+        # One atomic statement, so parallel attempts each get their own count.
+        # shortcut: rows of emails that stop trying are never deleted; prune old windows if the table grows.
+        row = self.conn.execute(
+            """
+            INSERT INTO login_attempts AS a (email, attempts, window_start) VALUES (%(email)s, 1, now())
+            ON CONFLICT (email) DO UPDATE SET
+                attempts = CASE WHEN a.window_start <= now() - %(window)s THEN 1 ELSE a.attempts + 1 END,
+                window_start = CASE WHEN a.window_start <= now() - %(window)s THEN now() ELSE a.window_start END
+            RETURNING attempts, extract(epoch FROM a.window_start + %(window)s - now())
+            """,
+            {"email": email, "window": window},
+        ).fetchone()
+        return row[0], float(row[1])
+
+    def clear_login_attempts(self, email: str) -> None:
+        self.conn.execute("DELETE FROM login_attempts WHERE email = %s", (email,))
 
     def conversation_exists(self, user_id: str, conversation_id: int) -> bool:
         row = self.conn.execute(

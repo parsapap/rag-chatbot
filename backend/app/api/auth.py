@@ -1,3 +1,6 @@
+import math
+from datetime import timedelta
+
 from fastapi import APIRouter, HTTPException, Response
 
 from app.api.deps import CurrentUser, Store
@@ -14,7 +17,11 @@ from app.schemas.auth import LoginRequest, RegisterRequest, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# shortcut: no rate limit on login, so passwords can be guessed as fast as scrypt allows; add one before exposing the app.
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_WINDOW = timedelta(minutes=15)
+
+# shortcut: the limit is per email only; guessing across many emails and floods of /register (each one
+# a scrypt hash) need a per-IP limit at the reverse proxy before the app is exposed.
 _COOKIE = {
     "httponly": True,  # page scripts cannot read the token, so an XSS bug cannot steal it
     "samesite": "lax",  # other sites cannot send POSTs that carry the cookie
@@ -39,11 +46,22 @@ def register(body: RegisterRequest, response: Response, store: Store) -> UserOut
 
 @router.post("/login", response_model=UserOut)
 def login(body: LoginRequest, response: Response, store: Store) -> UserOut:
+    # Counted before the password check: blocked attempts cost no scrypt time, and a burst of
+    # parallel guesses cannot all pass on the same count.
+    attempts, seconds_left = store.record_login_attempt(body.email, LOGIN_WINDOW)
+    if attempts > MAX_LOGIN_ATTEMPTS:
+        minutes = math.ceil(seconds_left / 60)
+        raise HTTPException(
+            429,
+            f"Too many login attempts. Try again in {minutes} minute{'' if minutes == 1 else 's'}.",
+            headers={"Retry-After": str(math.ceil(seconds_left))},
+        )
     found = store.find_login(body.email)
     # Hash even for an unknown email, so the response time does not reveal which emails exist.
     ok = verify_password(body.password, found[1] if found else DUMMY_HASH)
     if found is None or not ok:
         raise HTTPException(401, "Wrong email or password.")
+    store.clear_login_attempts(body.email)
     return _start_session(response, found[0])
 
 

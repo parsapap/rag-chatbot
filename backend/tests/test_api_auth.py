@@ -113,3 +113,70 @@ def test_two_accounts_only_see_their_own_documents(client, monkeypatch):
     client.post("/auth/logout")
     _register(client, email="bob@example.com")
     assert client.get("/documents").json() == []
+
+
+def _login(client, email="alice@example.com", password=PASSWORD):
+    return client.post("/auth/login", json={"email": email, "password": password})
+
+
+def test_sixth_attempt_is_blocked_even_with_the_right_password(client):
+    _register(client)
+    client.cookies.clear()
+    for _ in range(5):
+        assert _login(client, password="wrong-guess").status_code == 401
+    r = _login(client)
+    assert r.status_code == 429
+    assert "15 minutes" in r.json()["detail"]
+    assert 0 < int(r.headers["retry-after"]) <= 900
+    assert "set-cookie" not in r.headers
+
+
+def test_blocked_attempts_skip_the_password_hash(client, monkeypatch):
+    from app.api import auth
+
+    _register(client)
+    client.cookies.clear()
+    for _ in range(5):
+        _login(client, password="wrong-guess")
+    calls = []
+    monkeypatch.setattr(auth, "verify_password", lambda *a: calls.append(a) or True)
+    assert _login(client).status_code == 429
+    assert calls == []
+
+
+def test_successful_login_resets_the_count(client):
+    _register(client)
+    client.cookies.clear()
+    for _ in range(4):
+        _login(client, password="wrong-guess")
+    assert _login(client).status_code == 200
+    for _ in range(5):
+        assert _login(client, password="wrong-guess").status_code == 401
+
+
+def test_unknown_email_is_locked_like_a_real_one(client):
+    for _ in range(5):
+        assert _login(client, email="nobody@example.com", password="guess-guess").status_code == 401
+    assert _login(client, email="nobody@example.com", password="guess-guess").status_code == 429
+
+
+def test_lock_is_per_email_and_ends_with_the_window(client, store):
+    _register(client)
+    client.cookies.clear()
+    for _ in range(6):
+        _login(client, password="wrong-guess")
+    assert _login(client).status_code == 429
+    _register(client, email="bob@example.com")
+    client.cookies.clear()
+    assert _login(client, email="bob@example.com").status_code == 200
+    # Move alice's window into the past instead of waiting 15 minutes.
+    store.conn.execute("UPDATE login_attempts SET window_start = now() - interval '16 minutes'")
+    assert _login(client).status_code == 200
+
+
+def test_email_case_does_not_bypass_the_lock(client):
+    _register(client)
+    client.cookies.clear()
+    for _ in range(5):
+        _login(client, password="wrong-guess")
+    assert _login(client, email="ALICE@Example.com").status_code == 429
