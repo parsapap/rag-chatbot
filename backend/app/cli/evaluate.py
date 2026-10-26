@@ -3,8 +3,9 @@ import json
 import sys
 from pathlib import Path
 
-from app.services.embeddings import Embedder
 from app.db.store import SearchResult, VectorStore
+from app.services.embeddings import Embedder
+from app.services.rag import RAG
 
 KS = (1, 3, 5, 10)
 
@@ -22,6 +23,21 @@ def best_rank(results: list[SearchResult], filename: str, pages: list[int]) -> i
     # Some facts appear on several pages (a total in a table and in a note); any of them counts.
     ranks = [r for p in pages if (r := rank_of(results, filename, p)) is not None]
     return min(ranks, default=None)
+
+
+def evaluate_follow_ups(store, embedder, rag, items: list[dict]) -> tuple[list[int | None], list[int | None]]:
+    """Searches each follow-up as typed and after the rewrite; returns both rank lists."""
+    rewrites = [rag.rewrite_question(it["question"], [tuple(t) for t in it["history"]]) for it in items]
+    typed_vectors = embedder.embed_queries([it["question"] for it in items])
+    rewritten_vectors = embedder.embed_queries([r or it["question"] for it, r in zip(items, rewrites)])
+    typed, rewritten = [], []
+    for it, r, tv, rv in zip(items, rewrites, typed_vectors, rewritten_vectors):
+        a = best_rank(store.search(it["user_id"], tv, max(KS)), it["filename"], it["pages"])
+        b = best_rank(store.search(it["user_id"], rv, max(KS)), it["filename"], it["pages"])
+        typed.append(a)
+        rewritten.append(b)
+        print(f"  {str(a or '-'):>2} -> {str(b or '-'):<2}  {it['question']}  =>  {r or '(not rewritten)'}")
+    return typed, rewritten
 
 
 def summarize(ranks: list[int | None], ks: tuple[int, ...] = KS) -> dict[str, float]:
@@ -50,9 +66,13 @@ def main() -> int:
     for it in items:
         # Generated items carry "page"; hand-written ones carry "pages", empty when the documents have no answer.
         it.setdefault("pages", [it["page"]] if it.get("page") is not None else [])
+    # Items with a "history" of [question, answer] turns are follow-ups, scored in their own section.
+    follow_ups = [it for it in items if it.get("history")]
+    items = [it for it in items if not it.get("history")]
     answerable = [it for it in items if it["pages"]]
 
-    vectors = Embedder().embed_queries([it["question"] for it in items])
+    embedder = Embedder()
+    vectors = embedder.embed_queries([it["question"] for it in items])
     ranks: list[int | None] = []
     top_scores: dict[bool, list[float]] = {True: [], False: []}
     with VectorStore.connect() as store:
@@ -87,6 +107,14 @@ def main() -> int:
         per_file.setdefault(it["filename"], []).append(r)
     for name, rs in sorted(per_file.items()):
         print(f"  {summarize(rs, (5,))['hit@5']:.2f}  ({len(rs):2} q)  {name}")
+
+    if follow_ups:
+        print(f"\nfollow-up questions: {len(follow_ups)}  (rank as typed -> rank after rewrite)")
+        with VectorStore.connect() as store:
+            typed, rewritten = evaluate_follow_ups(store, embedder, RAG(store, embedder), follow_ups)
+        print("\n  metric   typed  rewritten")
+        for (name, a), b in zip(summarize(typed).items(), summarize(rewritten).values()):
+            print(f"  {name:7} {a:6.3f}  {b:9.3f}")
     return 0
 
 
