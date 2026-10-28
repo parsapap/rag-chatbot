@@ -1,18 +1,22 @@
 import hashlib
+import logging
 import tempfile
 from dataclasses import asdict
 from pathlib import Path, PurePath
 
 import psycopg
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Response, UploadFile
+from fastapi import APIRouter, HTTPException, Response, UploadFile
+from kombu.exceptions import OperationalError
 
 from app.api.deps import CurrentUser, Store
 from app.core.config import MAX_UPLOAD_BYTES
 from app.db.store import Document
 from app.schemas.documents import DocumentOut
-from app.services.chunking import chunk_pages
-from app.services.ingestion import process_document
+from app.services.chunking import Chunk, chunk_pages
 from app.services.loaders import SUPPORTED_EXTENSIONS, LoaderError, load
+from app.tasks import embed_document
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -25,6 +29,12 @@ def _out(doc: Document | None) -> DocumentOut:
     return DocumentOut(**asdict(doc))
 
 
+def enqueue_embedding(document_id: int, user_id: str, chunks: list[Chunk]) -> None:
+    # Embedding is slow and rate-limited, so the worker does it. RabbitMQ keeps the message on
+    # disk, so it survives a restart of the API, the worker or RabbitMQ itself.
+    embed_document.delay(document_id, user_id, [asdict(c) for c in chunks])
+
+
 def _clean_filename(raw: str | None) -> str:
     # The client's filename is only stored as a label, never used as a path.
     name = PurePath(raw or "").name
@@ -32,9 +42,7 @@ def _clean_filename(raw: str | None) -> str:
 
 
 @router.post("", status_code=202, response_model=DocumentOut)
-def upload_document(
-    file: UploadFile, background: BackgroundTasks, user_id: CurrentUser, store: Store
-) -> DocumentOut:
+def upload_document(file: UploadFile, user_id: CurrentUser, store: Store) -> DocumentOut:
     filename = _clean_filename(file.filename)
     ext = PurePath(filename).suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
@@ -74,8 +82,16 @@ def upload_document(
         # The same file uploaded twice at the same moment.
         raise HTTPException(409, {"message": "duplicate file"}) from e
 
-    background.add_task(process_document, doc_id, user_id, chunks)
-    return _out(store.get_document(user_id, doc_id))
+    # Read before publishing: once queued, the worker may finish before this line runs.
+    doc = _out(store.get_document(user_id, doc_id))
+    try:
+        enqueue_embedding(doc_id, user_id, chunks)
+    except OperationalError as e:
+        log.exception("could not queue document %s", doc_id)
+        # Remove the row, or the duplicate check would block uploading the same file again.
+        store.delete_document(user_id, doc_id)
+        raise HTTPException(503, "The processing queue is unavailable. Try the upload again in a minute.") from e
+    return doc
 
 
 @router.get("", response_model=list[DocumentOut])

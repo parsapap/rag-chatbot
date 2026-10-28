@@ -105,8 +105,8 @@ def test_forged_or_expired_tokens_are_rejected(client):
 
 
 def test_two_accounts_only_see_their_own_documents(client, monkeypatch):
-    # Skip background embedding: it would call Gemini and open its own connection to the real database.
-    monkeypatch.setattr(documents, "process_document", lambda *args: None)
+    # Skip queueing: the test needs no RabbitMQ and no embedding.
+    monkeypatch.setattr(documents, "enqueue_embedding", lambda *args: None)
     _register(client, email="alice@example.com")
     client.post("/documents", files={"file": ("a.txt", b"Alice's private notes about the budget. " * 3)})
     assert len(client.get("/documents").json()) == 1

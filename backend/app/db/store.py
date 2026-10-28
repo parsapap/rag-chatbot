@@ -226,16 +226,6 @@ class VectorStore:
             (error, document_id),
         )
 
-    def fail_interrupted(self) -> int:
-        # Assumes a single API process: its background tasks die with it, so
-        # anything still "processing" at startup will never finish.
-        cur = self.conn.execute(
-            "UPDATE documents SET status = 'failed', "
-            "error = 'interrupted: server restarted before processing finished' "
-            "WHERE status = 'processing'"
-        )
-        return cur.rowcount
-
     def get_document(self, user_id: str, document_id: int) -> Document | None:
         row = self.conn.execute(
             _DOCUMENT_SELECT.format(extra="AND d.id = %(id)s"),

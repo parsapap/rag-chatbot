@@ -1,4 +1,3 @@
-import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,14 +6,11 @@ from app.api import auth, chat, conversations, documents
 from app.api.deps import Store
 from app.db.store import VectorStore
 
-log = logging.getLogger(__name__)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    with VectorStore.connect() as store:
-        if n := store.fail_interrupted():
-            log.warning("marked %d interrupted document(s) as failed", n)
+    # Creates or migrates the schema before the first request.
+    VectorStore.connect().close()
     yield
 
 

@@ -23,10 +23,10 @@ class FakeEmbedder:
 @pytest.fixture
 def client(store, monkeypatch):
     embedder = FakeEmbedder()
-    # Background task must use the test schema and a fake embedder, not the real ones.
+    # Run the worker's job inline, against the test schema and a fake embedder, instead of queueing it.
     monkeypatch.setattr(
         documents,
-        "process_document",
+        "enqueue_embedding",
         lambda doc_id, user_id, chunks: ingestion.process_document(
             doc_id, user_id, chunks, store=store, embedder=embedder
         ),
@@ -135,3 +135,29 @@ def test_embedding_failure_marks_document_failed(client):
     assert doc["status"] == "failed"
     assert "embedding service down" in doc["error"]
     assert doc["chunks"] == 0
+
+
+def test_queue_down_returns_503_and_leaves_no_document(client, monkeypatch):
+    from kombu.exceptions import OperationalError
+
+    def down(*args):
+        raise OperationalError("connection refused")
+
+    monkeypatch.setattr(documents, "enqueue_embedding", down)
+    r = _upload(client, "alice", "a.txt", TEXT)
+    assert r.status_code == 503
+    assert "queue" in r.json()["detail"]
+    assert client.get("/documents", headers={"X-User-Id": "alice"}).json() == []
+    # The same file can be uploaded again once the queue is back.
+    monkeypatch.setattr(documents, "enqueue_embedding", lambda *args: None)
+    assert _upload(client, "alice", "a.txt", TEXT).status_code == 202
+
+
+def test_chunks_survive_the_trip_through_json():
+    import json
+    from dataclasses import asdict
+
+    from app.services.chunking import Chunk
+
+    c = Chunk(text="فیدیبو آرت", source="fidibo.pdf", page=14, index=3)
+    assert Chunk(**json.loads(json.dumps(asdict(c), ensure_ascii=False))) == c

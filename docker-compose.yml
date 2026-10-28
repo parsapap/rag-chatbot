@@ -16,11 +16,47 @@ services:
       timeout: 3s
       retries: 15
 
+  rabbitmq:
+    image: rabbitmq:4.4.0-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: rag
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env}
+    # Queued messages live here, so they survive a restart of RabbitMQ.
+    volumes:
+      - rabbitmqdata:/var/lib/rabbitmq
+    # Management panel only, and only on this machine. The broker port 5672 stays inside compose.
+    ports:
+      - "127.0.0.1:15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  worker:
+    build: ./backend
+    # concurrency 1: documents are embedded one at a time, so they queue up for the Gemini quota
+    # instead of all hitting it together.
+    command: ["celery", "-A", "app.worker", "worker", "--concurrency=1", "--loglevel=info"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://rag:${POSTGRES_PASSWORD}@db:5432/rag
+      CELERY_BROKER_URL: amqp://rag:${RABBITMQ_PASSWORD}@rabbitmq:5672//
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    # shortcut: no --reload like the API; restart the worker after changing task code.
+    volumes:
+      - ./backend/app:/app/app:ro
+
   app:
     build: ./backend
     env_file: .env
     environment:
       DATABASE_URL: postgresql://rag:${POSTGRES_PASSWORD}@db:5432/rag
+      CELERY_BROKER_URL: amqp://rag:${RABBITMQ_PASSWORD}@rabbitmq:5672//
     depends_on:
       db:
         condition: service_healthy
@@ -38,10 +74,13 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://rag:${POSTGRES_PASSWORD}@db:5432/rag
+      CELERY_BROKER_URL: amqp://rag:${RABBITMQ_PASSWORD}@rabbitmq:5672//
     depends_on:
       db:
         condition: service_healthy
-    # 127.0.0.1 only: auth is a placeholder (X-User-Id header) until phase 6,
+      rabbitmq:
+        condition: service_healthy
+    # 127.0.0.1 only: there is no login rate limit per IP, no HTTPS and no Secure cookie yet,
     # so the API must not be reachable from other machines.
     ports:
       - "127.0.0.1:8000:8000"
@@ -63,3 +102,4 @@ services:
 
 volumes:
   pgdata:
+  rabbitmqdata:
