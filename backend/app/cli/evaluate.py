@@ -1,6 +1,7 @@
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from app.db.store import SearchResult, VectorStore
@@ -8,6 +9,7 @@ from app.services.embeddings import Embedder
 from app.services.rag import RAG
 
 KS = (1, 3, 5, 10)
+REWRITE_PAUSE_SECONDS = 5
 
 
 def rank_of(results: list[SearchResult], filename: str, page: int) -> int | None:
@@ -27,7 +29,11 @@ def best_rank(results: list[SearchResult], filename: str, pages: list[int]) -> i
 
 def evaluate_follow_ups(store, embedder, rag, items: list[dict]) -> tuple[list[int | None], list[int | None]]:
     """Searches each follow-up as typed and after the rewrite; returns both rank lists."""
-    rewrites = [rag.rewrite_question(it["question"], [tuple(t) for t in it["history"]]) for it in items]
+    rewrites = []
+    for it in items:
+        rewrites.append(rag.rewrite_question(it["question"], [tuple(t) for t in it["history"]]))
+        # A burst of rewrites hits the free-tier quota, and a failed rewrite would be scored as "not rewritten".
+        time.sleep(REWRITE_PAUSE_SECONDS)
     typed_vectors = embedder.embed_queries([it["question"] for it in items])
     rewritten_vectors = embedder.embed_queries([r or it["question"] for it, r in zip(items, rewrites)])
     typed, rewritten = [], []
