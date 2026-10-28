@@ -3,7 +3,15 @@ from types import SimpleNamespace
 from app.core.messages import NO_ANSWER
 from google.genai import errors
 
-from app.services.rag import RAG, SYSTEM_PROMPT, build_prompt, build_rewrite_prompt, cited_numbers
+from app.services.rag import (
+    CANDIDATE_FACTOR,
+    RAG,
+    SYSTEM_PROMPT,
+    build_prompt,
+    build_rewrite_prompt,
+    cited_numbers,
+    spread_across_files,
+)
 from app.db.store import SearchResult
 
 
@@ -70,7 +78,7 @@ def test_no_documents_skips_llm():
 def test_ask_searches_only_that_user_and_sends_system_prompt():
     rag, store, models = _rag([_result("a.pdf", 1, "متن")], reply="جواب است [1].")
     answer = rag.ask("demo_a", "سؤال")
-    assert store.calls == [("demo_a", 3)]
+    assert store.calls == [("demo_a", 3 * CANDIDATE_FACTOR)]
     assert models.calls[0]["system"] == SYSTEM_PROMPT
     assert answer.text == "جواب است [1]."
     assert answer.cited == [1]
@@ -144,3 +152,26 @@ def test_punctuation_or_spacing_change_is_not_a_rewrite():
         assert rag.rewrite_question("میاره چیست", HISTORY) is None
     rag, _, _ = _rag([], reply="میاره از کی شروع شد؟")
     assert rag.rewrite_question("از کی شروع شد؟", HISTORY) == "میاره از کی شروع شد؟"
+
+
+def _scored(name, page, score):
+    return SearchResult(filename=name, page=page, chunk_index=0, content="", score=score)
+
+
+def test_one_long_file_cannot_take_every_slot():
+    results = [_scored("big.pdf", p, 0.9 - p / 100) for p in range(1, 11)] + [_scored("other.txt", 1, 0.7)]
+    picked = spread_across_files(results, 5)
+    assert [r.filename for r in picked].count("big.pdf") == 4
+    assert "other.txt" in [r.filename for r in picked]
+    assert [r.score for r in picked] == sorted((r.score for r in picked), reverse=True)
+
+
+def test_single_file_still_fills_every_slot():
+    results = [_scored("only.pdf", p, 0.9 - p / 100) for p in range(1, 11)]
+    picked = spread_across_files(results, 5)
+    assert [r.page for r in picked] == [1, 2, 3, 4, 5]
+
+
+def test_fewer_candidates_than_k():
+    results = [_scored("a.pdf", 1, 0.8), _scored("b.pdf", 1, 0.7)]
+    assert len(spread_across_files(results, 5)) == 2
