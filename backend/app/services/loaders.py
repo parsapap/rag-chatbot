@@ -159,12 +159,63 @@ def _page_number_lines(pages: list[list[str]]) -> set[tuple[int, int]]:
 
 
 def _page_text(page: pymupdf.Page) -> str:
-    lines = []
+    lines: list[tuple[tuple[float, float, float, float], str]] = []
     for block in page.get_text("rawdict")["blocks"]:
         for line in block.get("lines", []):
             chars = [c for span in line["spans"] for c in span["chars"]]
-            lines.append(_fix_lam_alef(chars))
-    return "\n".join(lines)
+            lines.append((line["bbox"], _fix_lam_alef(chars)))
+    return "\n".join(_merge_table_rows(lines))
+
+
+# Excel-made PDFs put every table cell on its own line, so "label / 1404 value / 1403 value"
+# loses which number belongs to which row. Lines whose vertical middles are this close
+# (in points) sit on one visual row.
+_ROW_TOLERANCE = 3.0
+# A horizontal gap wider than this (in points) between two lines of a row is a cell border.
+_CELL_GAP = 8.0
+_NUMERIC_CELL = re.compile(r"^[()\s\d,./%\-]*\d[()\s\d,./%\-]*$")
+_LETTER = re.compile(r"[^\W\d_]")
+
+
+def _is_table_row(texts: list[str]) -> bool:
+    # A table row: two or more cells, at least one number, and at most one text cell (the
+    # row label). Two side-by-side text cells are prose columns, which must stay apart.
+    # Cells without letters, like the "(" and ")" around a negative amount, are not text.
+    cells = [t.strip() for t in texts if t.strip()]
+    numbers = [t for t in cells if _NUMERIC_CELL.match(t)]
+    words = [t for t in cells if _LETTER.search(t) and not _NUMERIC_CELL.match(t)]
+    return len(cells) >= 2 and len(numbers) >= 1 and len(words) <= 1
+
+
+def _join_row(cells: list[tuple[tuple[float, float, float, float], str]]) -> str:
+    # Right to left: the rightmost cell is read first, as on a Persian page.
+    cells = sorted(cells, key=lambda c: -c[0][2])
+    out = cells[0][1].strip()
+    for prev, cur in zip(cells, cells[1:]):
+        gap = prev[0][0] - cur[0][2]
+        out += (" | " if gap > _CELL_GAP else " ") + cur[1].strip()
+    # A negative amount is drawn as "(", number, ")" in three cells; keep it as "( 365,327 )".
+    return re.sub(r"\(\s*\|\s*", "( ", re.sub(r"\s*\|\s*\)", " )", out))
+
+
+def _merge_table_rows(lines: list[tuple[tuple[float, float, float, float], str]]) -> list[str]:
+    middle = [(bbox[1] + bbox[3]) / 2 for bbox, _ in lines]
+    rows: list[list[int]] = []
+    for i in sorted(range(len(lines)), key=lambda i: middle[i]):
+        if rows and abs(middle[rows[-1][0]] - middle[i]) <= _ROW_TOLERANCE:
+            rows[-1].append(i)
+        else:
+            rows.append([i])
+
+    merged: dict[int, str] = {}
+    dropped: set[int] = set()
+    for row in rows:
+        if len(row) > 1 and _is_table_row([lines[i][1] for i in row]):
+            first = min(row)
+            merged[first] = _join_row([lines[i] for i in row])
+            dropped.update(i for i in row if i != first)
+    # The merged row takes the place of its first line, so everything else keeps its order.
+    return [merged.get(i, text) for i, (_, text) in enumerate(lines) if i not in dropped]
 
 
 # Word/Excel PDFs draw the lam-alef ligature as one glyph that pymupdf

@@ -143,3 +143,49 @@ def test_repeated_line_without_number_is_kept():
 def test_numbers_that_are_data_not_removed():
     texts = [f"مبلغ کل\n{n}" for n in (500, 72, 9100, 31)]
     assert strip_page_furniture(texts) == texts
+
+
+def _line(x0, x1, y, text):
+    return ((x0, y, x1, y + 10), text)
+
+
+def test_table_row_cells_are_joined_right_to_left():
+    from app.services.loaders import _merge_table_rows
+
+    lines = [
+        _line(400, 500, 100, "بانک سامان"),
+        _line(200, 230, 101, "7,857"),
+        _line(50, 90, 100, "144,526"),
+    ]
+    assert _merge_table_rows(lines) == ["بانک سامان | 7,857 | 144,526"]
+
+
+def test_two_text_cells_on_one_row_stay_apart():
+    from app.services.loaders import _merge_table_rows
+
+    lines = [_line(300, 500, 100, "ستون راست متن"), _line(20, 250, 100, "ستون چپ متن")]
+    assert _merge_table_rows(lines) == ["ستون راست متن", "ستون چپ متن"]
+
+
+def test_negative_amount_in_parentheses_stays_together():
+    from app.services.loaders import _merge_table_rows
+
+    lines = [
+        _line(300, 500, 100, "مالیات بر درآمد"),
+        _line(250, 255, 100, "("),
+        _line(200, 245, 100, "365,327"),
+        _line(190, 195, 100, ")"),
+    ]
+    assert _merge_table_rows(lines) == ["مالیات بر درآمد | ( 365,327 )"]
+
+
+def test_lines_on_different_rows_keep_their_order():
+    from app.services.loaders import _merge_table_rows
+
+    lines = [
+        _line(300, 500, 100, "عنوان"),
+        _line(300, 500, 140, "حقوق پایه"),
+        _line(100, 150, 140, "2,222,763"),
+        _line(300, 500, 180, "پایان"),
+    ]
+    assert _merge_table_rows(lines) == ["عنوان", "حقوق پایه | 2,222,763", "پایان"]
