@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, type Doc } from "./api-client";
+import { api, type Doc, statusLabel } from "./api-client";
 
 const POLL_MS = 2000;
 
@@ -119,7 +119,7 @@ export default function Documents({ email, onLogout }: { email: string; onLogout
                 {d.filename}
               </span>
               <span className={`font-mono text-xs ${STATUS[d.status].className}`}>
-                <span aria-hidden="true">{STATUS[d.status].glyph}</span> {d.status}
+                <span aria-hidden="true">{STATUS[d.status].glyph}</span> {statusLabel(d)}
               </span>
               <span className="font-mono text-xs text-muted-foreground">
                 {plural(d.pages, "page")}

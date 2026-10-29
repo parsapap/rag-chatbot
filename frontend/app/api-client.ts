@@ -5,7 +5,18 @@ export type Doc = {
   chunks: number;
   status: "processing" | "ready" | "failed";
   error: string | null;
+  total_chunks: number;
+  // null while the document waits in the queue; counts up while the worker embeds.
+  embedded_chunks: number | null;
 };
+
+export function statusLabel(d: Doc): string {
+  if (d.status !== "processing") return d.status;
+  if (d.embedded_chunks === null) return "queued";
+  // Floor, so the label never says 100% before the document is actually ready.
+  const percent = d.total_chunks ? Math.floor((d.embedded_chunks / d.total_chunks) * 100) : 0;
+  return `embedding ${Math.min(percent, 99)}%`;
+}
 
 export type User = { id: number; email: string };
 
