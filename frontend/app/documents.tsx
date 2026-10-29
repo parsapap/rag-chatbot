@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api, type Doc, statusLabel } from "./api-client";
+import { useConfirm } from "./confirm-dialog";
 
 const POLL_MS = 2000;
 
@@ -18,6 +19,7 @@ export default function Documents({ email, onLogout }: { email: string; onLogout
   const [version, setVersion] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [confirmDelete, dialog] = useConfirm();
 
   const reload = () => setVersion((v) => v + 1);
 
@@ -55,7 +57,13 @@ export default function Documents({ email, onLogout }: { email: string; onLogout
   }
 
   async function remove(doc: Doc) {
-    if (!confirm(`Delete ${doc.filename}? Its chunks are removed too.`)) return;
+    const ok = await confirmDelete({
+      title: "Delete this document?",
+      name: doc.filename,
+      detail: "Its text and search data are removed. Saved conversations keep their answers.",
+      action: "Delete",
+    });
+    if (!ok) return;
     setMessage(null);
     try {
       await api(`/documents/${doc.id}`, { method: "DELETE" });
@@ -67,6 +75,7 @@ export default function Documents({ email, onLogout }: { email: string; onLogout
 
   return (
     <aside className="flex flex-col gap-4 border-b border-border p-5 lg:border-b-0">
+      {dialog}
       <div className="flex items-baseline justify-between gap-3 border-b border-border pb-3">
         <h2 className="font-medium">Documents</h2>
         <span className="flex min-w-0 items-baseline gap-2 font-mono text-xs text-muted-foreground">

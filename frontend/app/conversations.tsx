@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "./api-client";
+import { useConfirm } from "./confirm-dialog";
 
 type Conversation = { id: number; title: string; updated_at: string };
 
@@ -16,6 +17,7 @@ export default function Conversations({ activeId, version, onOpen, onNew }: Prop
   const [items, setItems] = useState<Conversation[] | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
+  const [confirmDelete, dialog] = useConfirm();
 
   useEffect(() => {
     let live = true;
@@ -32,7 +34,13 @@ export default function Conversations({ activeId, version, onOpen, onNew }: Prop
   }, [version, reloads]);
 
   async function remove(c: Conversation) {
-    if (!confirm(`Delete the conversation "${c.title}"?`)) return;
+    const ok = await confirmDelete({
+      title: "Delete this conversation?",
+      name: c.title,
+      detail: "All its questions and answers are removed. This cannot be undone.",
+      action: "Delete",
+    });
+    if (!ok) return;
     try {
       await api(`/conversations/${c.id}`, { method: "DELETE" });
       if (c.id === activeId) onNew();
@@ -44,6 +52,7 @@ export default function Conversations({ activeId, version, onOpen, onNew }: Prop
 
   return (
     <section aria-labelledby="conversations-heading" className="flex flex-col gap-3 border-y border-border p-5 lg:border-b-0">
+      {dialog}
       <div className="flex items-baseline justify-between gap-3 border-b border-border pb-3">
         <h2 id="conversations-heading" className="font-medium">
           Conversations
