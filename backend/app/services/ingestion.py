@@ -36,7 +36,11 @@ def process_document(
     if doc is None or doc.status != "processing":
         return
     try:
-        vectors = embedder.embed_documents([c.text for c in chunks])
+        # 0 marks "started": the panel switches from queued to a percentage. A retry starts over at 0.
+        store.set_progress(document_id, 0)
+        vectors = embedder.embed_documents(
+            [c.text for c in chunks], on_progress=lambda n: store.set_progress(document_id, n)
+        )
         store.complete_document(document_id, user_id, chunks, vectors)
     except Exception as e:
         if can_retry and is_transient(e):

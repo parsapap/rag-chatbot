@@ -9,9 +9,9 @@ from google.genai import errors, types
 
 MODEL = os.environ.get("GEMINI_EMBED_MODEL", "gemini-embedding-001")
 DIM = 768
-# API allows 100 texts per request, but the free tier counts each text as one
-# request (100/minute), so a full batch alone uses the whole minute's quota.
-BATCH_SIZE = 50
+# The free tier counts each text, not each request (100 texts/minute), so small batches cost
+# no extra quota and let upload progress move in small steps.
+BATCH_SIZE = 10
 MAX_RETRIES = 5
 # Without a server hint, wait out the whole per-minute window.
 DEFAULT_RETRY_SECONDS = 61.0
@@ -30,8 +30,10 @@ class Embedder:
         self.dim = dim
         self._sleep = sleep
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return self._embed(texts, "RETRIEVAL_DOCUMENT")
+    def embed_documents(
+        self, texts: list[str], on_progress: Callable[[int], None] | None = None
+    ) -> list[list[float]]:
+        return self._embed(texts, "RETRIEVAL_DOCUMENT", on_progress)
 
     def embed_queries(self, texts: list[str]) -> list[list[float]]:
         return self._embed(texts, "RETRIEVAL_QUERY")
@@ -39,10 +41,14 @@ class Embedder:
     def embed_query(self, text: str) -> list[float]:
         return self.embed_queries([text])[0]
 
-    def _embed(self, texts: list[str], task_type: str) -> list[list[float]]:
+    def _embed(
+        self, texts: list[str], task_type: str, on_progress: Callable[[int], None] | None = None
+    ) -> list[list[float]]:
         vectors: list[list[float]] = []
         for i in range(0, len(texts), BATCH_SIZE):
             vectors.extend(self._call(texts[i : i + BATCH_SIZE], task_type))
+            if on_progress:
+                on_progress(len(vectors))
         return vectors
 
     def _call(self, batch: list[str], task_type: str) -> list[list[float]]:

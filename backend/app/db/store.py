@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS documents (
 -- ADD COLUMN IF NOT EXISTS so databases created before these columns existed get them too.
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready';
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS error TEXT;
+-- Progress: embedded_chunks stays NULL while the document waits in the queue.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS total_chunks INT NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS embedded_chunks INT;
 
 CREATE TABLE IF NOT EXISTS chunks (
     id           BIGSERIAL PRIMARY KEY,
@@ -89,7 +92,7 @@ TITLE_CHARS = 80
 Status = Literal["processing", "ready", "failed"]
 
 _DOCUMENT_SELECT = """
-    SELECT d.id, d.filename, d.pages, count(c.id), d.status, d.error
+    SELECT d.id, d.filename, d.pages, count(c.id), d.status, d.error, d.total_chunks, d.embedded_chunks
     FROM documents d
     LEFT JOIN chunks c ON c.document_id = d.id
     WHERE d.user_id = %(user_id)s {extra}
@@ -106,6 +109,8 @@ class Document:
     chunks: int
     status: Status
     error: str | None
+    total_chunks: int
+    embedded_chunks: int | None
 
 
 @dataclass(frozen=True)
@@ -194,12 +199,18 @@ class VectorStore:
     ) -> int:
         # One transaction: either the document and all its chunks are saved, or nothing.
         with self.conn.transaction():
-            doc_id = self._insert_document(user_id, filename, sha256, pages, "ready")
+            doc_id = self._insert_document(user_id, filename, sha256, pages, "ready", len(chunks))
             self._insert_chunks(doc_id, user_id, chunks, vectors)
         return doc_id
 
-    def create_document(self, user_id: str, filename: str, sha256: str, pages: int) -> int:
-        return self._insert_document(user_id, filename, sha256, pages, "processing")
+    def create_document(self, user_id: str, filename: str, sha256: str, pages: int, total_chunks: int) -> int:
+        return self._insert_document(user_id, filename, sha256, pages, "processing", total_chunks)
+
+    def set_progress(self, document_id: int, embedded_chunks: int) -> None:
+        self.conn.execute(
+            "UPDATE documents SET embedded_chunks = %s WHERE id = %s AND status = 'processing'",
+            (embedded_chunks, document_id),
+        )
 
     def complete_document(
         self, document_id: int, user_id: str, chunks: list[Chunk], vectors: list[list[float]]
@@ -383,12 +394,13 @@ class VectorStore:
         return cur.rowcount == 1
 
     def _insert_document(
-        self, user_id: str, filename: str, sha256: str, pages: int, status: Status
+        self, user_id: str, filename: str, sha256: str, pages: int, status: Status, total_chunks: int
     ) -> int:
+        embedded = total_chunks if status == "ready" else None
         return self.conn.execute(
-            "INSERT INTO documents (user_id, filename, sha256, pages, status) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (user_id, filename, sha256, pages, status),
+            "INSERT INTO documents (user_id, filename, sha256, pages, status, total_chunks, embedded_chunks) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (user_id, filename, sha256, pages, status, total_chunks, embedded),
         ).fetchone()[0]
 
     def _insert_chunks(

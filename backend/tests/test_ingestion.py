@@ -15,7 +15,7 @@ class Embedder:
         self.error = error
         self.calls = 0
 
-    def embed_documents(self, texts):
+    def embed_documents(self, texts, on_progress=None):
         self.calls += 1
         if self.error:
             raise self.error
@@ -23,7 +23,7 @@ class Embedder:
 
 
 def _doc(store):
-    return store.create_document("u", "a.txt", "hash", 1)
+    return store.create_document("u", "a.txt", "hash", 1, len(CHUNKS))
 
 
 def test_success_marks_ready(store):
@@ -67,3 +67,31 @@ def test_deleted_document_is_skipped(store):
     embedder = Embedder()
     process_document(doc_id, "u", CHUNKS, store=store, embedder=embedder)
     assert embedder.calls == 0
+
+
+def test_new_document_is_queued_until_the_worker_starts(store):
+    doc = store.get_document("u", _doc(store))
+    assert (doc.status, doc.total_chunks, doc.embedded_chunks) == ("processing", 1, None)
+
+
+def test_progress_counts_up_and_ends_at_the_total(store):
+    doc_id = _doc(store)
+    seen = []
+
+    class Recording(Embedder):
+        def embed_documents(self, texts, on_progress=None):
+            on_progress(len(texts))
+            seen.append(store.get_document("u", doc_id).embedded_chunks)
+            return super().embed_documents(texts)
+
+    process_document(doc_id, "u", CHUNKS, store=store, embedder=Recording())
+    doc = store.get_document("u", doc_id)
+    assert seen == [1]
+    assert (doc.status, doc.total_chunks) == ("ready", 1)
+
+
+def test_progress_does_not_touch_a_finished_document(store):
+    doc_id = _doc(store)
+    process_document(doc_id, "u", CHUNKS, store=store, embedder=Embedder())
+    store.set_progress(doc_id, 0)
+    assert store.get_document("u", doc_id).status == "ready"

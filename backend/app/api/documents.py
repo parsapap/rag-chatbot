@@ -77,7 +77,7 @@ def upload_document(file: UploadFile, user_id: CurrentUser, store: Store) -> Doc
         raise HTTPException(422, "no text found (a scanned PDF needs OCR, which is not supported)")
 
     try:
-        doc_id = store.create_document(user_id, filename, sha256, len(pages))
+        doc_id = store.create_document(user_id, filename, sha256, len(pages), len(chunks))
     except psycopg.errors.UniqueViolation as e:
         # The same file uploaded twice at the same moment.
         raise HTTPException(409, {"message": "duplicate file"}) from e

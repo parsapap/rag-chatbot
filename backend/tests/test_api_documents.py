@@ -14,7 +14,7 @@ class FakeEmbedder:
     def __init__(self, fail: bool = False):
         self.fail = fail
 
-    def embed_documents(self, texts):
+    def embed_documents(self, texts, on_progress=None):
         if self.fail:
             raise RuntimeError("embedding service down")
         return [[1.0] + [0.0] * (DIM - 1) for _ in texts]
@@ -161,3 +161,10 @@ def test_chunks_survive_the_trip_through_json():
 
     c = Chunk(text="فیدیبو آرت", source="fidibo.pdf", page=14, index=3)
     assert Chunk(**json.loads(json.dumps(asdict(c), ensure_ascii=False))) == c
+
+
+def test_upload_reports_total_chunks_and_starts_queued(client, monkeypatch):
+    monkeypatch.setattr(documents, "enqueue_embedding", lambda *args: None)
+    body = _upload(client, "alice", "notes.txt", TEXT).json()
+    assert body["total_chunks"] >= 1
+    assert body["embedded_chunks"] is None

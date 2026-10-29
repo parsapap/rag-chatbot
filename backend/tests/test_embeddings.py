@@ -81,3 +81,9 @@ def test_other_errors_are_not_retried():
 def test_cosine():
     assert cosine([0.6, 0.8], [0.6, 0.8]) == pytest.approx(1.0)
     assert cosine([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
+
+
+def test_progress_is_reported_after_each_batch():
+    seen = []
+    _embedder(FakeModels()).embed_documents(["t"] * (BATCH_SIZE * 2 + 3), on_progress=seen.append)
+    assert seen == [BATCH_SIZE, BATCH_SIZE * 2, BATCH_SIZE * 2 + 3]
