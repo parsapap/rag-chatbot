@@ -10,6 +10,7 @@ from google.genai import errors, types
 from app.core.messages import language_of, no_answer
 from app.db.store import SearchResult, VectorStore
 from app.services.embeddings import Embedder
+from app.services.loaders import normalize
 
 log = logging.getLogger(__name__)
 
@@ -169,7 +170,8 @@ class RAG:
 
     def retrieve(self, user_id: str, query: str, k: int | None = None) -> list[SearchResult]:
         k = k or self.k
-        candidates = self.store.search(user_id, self.embedder.embed_query(query), k * CANDIDATE_FACTOR)
+        # Same normalization as the documents got at upload, so ۲,۰۵۲ in a question matches 2,052 in a file.
+        candidates = self.store.search(user_id, self.embedder.embed_query(normalize(query)), k * CANDIDATE_FACTOR)
         return spread_across_files(candidates, k)
 
     def ask(self, user_id: str, question: str, k: int | None = None, history: History | None = None) -> Answer:
