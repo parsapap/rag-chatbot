@@ -9,6 +9,22 @@ from psycopg.types.json import Jsonb
 from app.services.chunking import Chunk
 from app.services.embeddings import DIM
 
+
+def _keywords(text_sql: str) -> str:
+    # 'simple' only lowercases and splits; Postgres has no Persian stemmer. Before splitting:
+    # 2,052,236 becomes 2052236 (else 2 and 052...), 28-1-5 becomes 28.1.5 (else 28, -1, -5),
+    # and digits glued to letters (مسافران28-1-1) get a space so the code is its own word.
+    return (
+        "to_tsvector('simple', regexp_replace(regexp_replace(regexp_replace("
+        f"{text_sql}, '(?<=\\d),(?=\\d\\d\\d)', '', 'g'), '(?<=\\d)-(?=\\d)', '.', 'g'), "
+        "'(?<=[^\\d\\s.,/])(?=\\d)|(?<=\\d)(?=[^\\d\\s.,/])', ' ', 'g'))"
+    )
+
+
+# BM25 constants, the usual defaults.
+BM25_K1 = 1.2
+BM25_B = 0.75
+
 SCHEMA = f"""
 CREATE EXTENSION IF NOT EXISTS vector SCHEMA public;
 
@@ -38,6 +54,10 @@ CREATE TABLE IF NOT EXISTS chunks (
     content      TEXT NOT NULL,
     embedding    vector({DIM}) NOT NULL
 );
+
+-- Words of each chunk for keyword search. STORED: existing rows are filled when the column is added.
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS tsv tsvector
+    GENERATED ALWAYS AS ({_keywords("content")}) STORED;
 
 CREATE INDEX IF NOT EXISTS chunks_user_id_idx ON chunks (user_id);
 CREATE INDEX IF NOT EXISTS chunks_embedding_idx
@@ -270,6 +290,44 @@ class VectorStore:
             LIMIT %(k)s
             """,
             {"q": _vector_literal(query_vector), "user_id": user_id, "k": k},
+        ).fetchall()
+        return [SearchResult(*r) for r in rows]
+
+    def keyword_search(self, user_id: str, query: str, k: int = 5) -> list[SearchResult]:
+        # BM25 in SQL. Postgres's ts_rank has no IDF, so a common word like «به» counted as much
+        # as a rare number. IDF comes from this user's chunks only, so others' files never affect it.
+        # shortcut: scans all of the user's chunks per query, fine for thousands; use a BM25 index beyond that.
+        rows = self.conn.execute(
+            f"""
+            WITH docs AS (
+                SELECT id, document_id, page, chunk_index, content, tsv, length(tsv) AS dl
+                FROM chunks WHERE user_id = %(user_id)s
+            ),
+            stats AS (SELECT count(*)::float AS n, avg(dl) AS avgdl FROM docs),
+            terms AS (SELECT DISTINCT unnest(tsvector_to_array({_keywords("%(q)s")})) AS term),
+            tf AS (
+                SELECT docs.id, l.lexeme AS term, cardinality(l.positions) AS f, docs.dl
+                FROM docs CROSS JOIN LATERAL unnest(docs.tsv) AS l
+                JOIN terms ON terms.term = l.lexeme
+            ),
+            df AS (SELECT term, count(*) AS df FROM tf GROUP BY term),
+            scored AS (
+                SELECT tf.id, sum(
+                    ln(1 + (stats.n - df.df + 0.5) / (df.df + 0.5))
+                    * tf.f * (%(k1)s + 1)
+                    / (tf.f + %(k1)s * (1 - %(b)s + %(b)s * tf.dl / stats.avgdl))
+                ) AS score
+                FROM tf JOIN df USING (term), stats
+                GROUP BY tf.id
+            )
+            SELECT d.filename, docs.page, docs.chunk_index, docs.content, scored.score
+            FROM scored
+            JOIN docs ON docs.id = scored.id
+            JOIN documents d ON d.id = docs.document_id
+            ORDER BY scored.score DESC, docs.id
+            LIMIT %(k)s
+            """,
+            {"q": query, "user_id": user_id, "k": k, "k1": BM25_K1, "b": BM25_B},
         ).fetchall()
         return [SearchResult(*r) for r in rows]
 

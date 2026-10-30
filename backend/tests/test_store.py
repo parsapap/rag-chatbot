@@ -77,3 +77,33 @@ def test_recent_turns_are_oldest_first_limited_and_private(store):
     assert store.recent_turns("a", cid, 2) == [("q2", "a2"), ("q3", "a3")]
     assert store.recent_turns("b", cid, 2) == []
     assert store.get_conversation("a", cid)[1][-1].search_query == "q3 rewritten"
+
+
+def _add_texts(store, user, name, texts):
+    chunks = [Chunk(text=t, source=name, page=i + 1, index=i) for i, t in enumerate(texts)]
+    return store.add_document(user, name, name, len(texts), chunks, [_vec(i) for i in range(len(texts))])
+
+
+def test_keyword_search_matches_numbers_and_note_codes(store):
+    _add_texts(store, "a", "fs.pdf", [
+        "سود خالص سال 2,052,236 میلیون ریال",
+        "حساب های پرداختنی28-1-5 | 2,506,755",
+        "متن دیگر بدون عدد",
+    ])
+    assert store.keyword_search("a", "مبلغ 2,052,236 چیست")[0].page == 1
+    assert store.keyword_search("a", "یادداشت 28-1-5")[0].page == 2
+    # 28-1 is a different note, not a prefix match of 28-1-5.
+    assert store.keyword_search("a", "یادداشت 28-1") == []
+
+
+def test_keyword_search_prefers_rare_words(store):
+    _add_texts(store, "a", "x.pdf", ["به به به به تپسی", "به اسنپ", "به", "به"])
+    # «به» is in every chunk, so it adds almost nothing; the rare word decides.
+    assert store.keyword_search("a", "به اسنپ")[0].page == 2
+
+
+def test_keyword_search_is_per_user(store):
+    _add_texts(store, "a", "secret.pdf", ["رمز 987654"])
+    _add_texts(store, "b", "b.pdf", ["چیز دیگر"])
+    assert store.keyword_search("b", "987654") == []
+    assert store.keyword_search("nobody", "987654") == []
