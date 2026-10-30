@@ -2,7 +2,7 @@ import logging
 import os
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from google import genai
 from google.genai import errors, types
@@ -18,6 +18,9 @@ CHAT_MODEL = os.environ.get("GEMINI_CHAT_MODEL", "gemini-3.5-flash-lite")
 TOP_K = 5
 # Search this many times k, then pick k so a single file cannot take every slot.
 CANDIDATE_FACTOR = 3
+# Reciprocal rank fusion constant. The common default 60 flattens ranks (1/61 vs 1/70), so a number
+# that only BM25 finds at rank 1 lost to chunks both lists ranked mid-way; 1 keeps each list's top hits.
+RRF_K = 1
 
 # Follow-up questions are rewritten from this many earlier turns; older ones rarely matter.
 HISTORY_TURNS = 3
@@ -111,6 +114,21 @@ def _clean_rewrite(text: str | None) -> str:
     return lines[0].strip(" \"'«»“”")[:MAX_REWRITE_CHARS] if lines else ""
 
 
+def fuse(*ranked: list[SearchResult]) -> list[SearchResult]:
+    """Reciprocal rank fusion: merge result lists by rank, since cosine and BM25 scores are not comparable."""
+    scores: dict[tuple, float] = {}
+    first: dict[tuple, SearchResult] = {}
+    for results in ranked:
+        for rank, r in enumerate(results, 1):
+            key = (r.filename, r.page, r.chunk_index, r.content)
+            scores[key] = scores.get(key, 0.0) + 1 / (RRF_K + rank)
+            first.setdefault(key, r)
+    # Scaled so 1.0 means rank 1 in every list; the UI draws the score as a 0..1 bar.
+    best = len(ranked) / (RRF_K + 1)
+    fused = [replace(first[key], score=s / best) for key, s in scores.items()]
+    return sorted(fused, key=lambda r: -r.score)
+
+
 def spread_across_files(results: list[SearchResult], k: int) -> list[SearchResult]:
     """The best k results, with no file taking more than its share while other files are waiting.
 
@@ -171,8 +189,12 @@ class RAG:
     def retrieve(self, user_id: str, query: str, k: int | None = None) -> list[SearchResult]:
         k = k or self.k
         # Same normalization as the documents got at upload, so ۲,۰۵۲ in a question matches 2,052 in a file.
-        candidates = self.store.search(user_id, self.embedder.embed_query(normalize(query)), k * CANDIDATE_FACTOR)
-        return spread_across_files(candidates, k)
+        query = normalize(query)
+        n = k * CANDIDATE_FACTOR
+        # Vectors find meaning; keywords find exact numbers, note codes and rare names.
+        by_meaning = self.store.search(user_id, self.embedder.embed_query(query), n)
+        by_words = self.store.keyword_search(user_id, query, n)
+        return spread_across_files(fuse(by_meaning, by_words), k)
 
     def ask(self, user_id: str, question: str, k: int | None = None, history: History | None = None) -> Answer:
         rewritten = self.rewrite_question(question, history or [])

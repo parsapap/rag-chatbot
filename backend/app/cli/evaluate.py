@@ -1,12 +1,14 @@
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
 from app.db.store import SearchResult, VectorStore
 from app.services.embeddings import Embedder
-from app.services.rag import RAG
+from app.services.loaders import normalize
+from app.services.rag import CANDIDATE_FACTOR, RAG, fuse
 
 KS = (1, 3, 5, 10)
 REWRITE_PAUSE_SECONDS = 5
@@ -38,12 +40,20 @@ def evaluate_follow_ups(store, embedder, rag, items: list[dict]) -> tuple[list[i
     rewritten_vectors = embedder.embed_queries([r or it["question"] for it, r in zip(items, rewrites)])
     typed, rewritten = [], []
     for it, r, tv, rv in zip(items, rewrites, typed_vectors, rewritten_vectors):
-        a = best_rank(store.search(it["user_id"], tv, max(KS)), it["filename"], it["pages"])
-        b = best_rank(store.search(it["user_id"], rv, max(KS)), it["filename"], it["pages"])
+        a = best_rank(hybrid(store, it["user_id"], it["question"], tv), it["filename"], it["pages"])
+        b = best_rank(hybrid(store, it["user_id"], r or it["question"], rv), it["filename"], it["pages"])
         typed.append(a)
         rewritten.append(b)
         print(f"  {str(a or '-'):>2} -> {str(b or '-'):<2}  {it['question']}  =>  {r or '(not rewritten)'}")
     return typed, rewritten
+
+
+def hybrid(store, user_id: str, question: str, vector: list[float]) -> list[SearchResult]:
+    # Same fusion as RAG.retrieve, without spread_across_files, so ranks past 5 are still measured.
+    if os.environ.get("EVAL_VECTOR_ONLY"):
+        return store.search(user_id, vector, max(KS))
+    n = max(KS) * CANDIDATE_FACTOR
+    return fuse(store.search(user_id, vector, n), store.keyword_search(user_id, normalize(question), n))[: max(KS)]
 
 
 def summarize(ranks: list[int | None], ks: tuple[int, ...] = KS) -> dict[str, float]:
@@ -83,7 +93,7 @@ def main() -> int:
     top_scores: dict[bool, list[float]] = {True: [], False: []}
     with VectorStore.connect() as store:
         for it, v in zip(items, vectors):
-            results = store.search(it["user_id"], v, max(KS))
+            results = hybrid(store, it["user_id"], it["question"], v)
             top_scores[bool(it["pages"])].append(results[0].score if results else 0.0)
             if not it["pages"]:
                 continue

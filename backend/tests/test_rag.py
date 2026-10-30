@@ -1,4 +1,7 @@
+from dataclasses import replace
 from types import SimpleNamespace
+
+import pytest
 
 from app.core.messages import NO_ANSWER
 from google.genai import errors
@@ -10,6 +13,7 @@ from app.services.rag import (
     build_prompt,
     build_rewrite_prompt,
     cited_numbers,
+    fuse,
     spread_across_files,
 )
 from app.db.store import SearchResult
@@ -27,6 +31,10 @@ class FakeStore:
     def search(self, user_id, vector, k):
         self.calls.append((user_id, k))
         return self.results
+
+    def keyword_search(self, user_id, query, k):
+        self.calls.append((user_id, k, query))
+        return []
 
 
 class FakeEmbedder:
@@ -78,7 +86,7 @@ def test_no_documents_skips_llm():
 def test_ask_searches_only_that_user_and_sends_system_prompt():
     rag, store, models = _rag([_result("a.pdf", 1, "متن")], reply="جواب است [1].")
     answer = rag.ask("demo_a", "سؤال")
-    assert store.calls == [("demo_a", 3 * CANDIDATE_FACTOR)]
+    assert store.calls == [("demo_a", 3 * CANDIDATE_FACTOR), ("demo_a", 3 * CANDIDATE_FACTOR, "سؤال")]
     assert models.calls[0]["system"] == SYSTEM_PROMPT
     assert answer.text == "جواب است [1]."
     assert answer.cited == [1]
@@ -175,3 +183,19 @@ def test_single_file_still_fills_every_slot():
 def test_fewer_candidates_than_k():
     results = [_scored("a.pdf", 1, 0.8), _scored("b.pdf", 1, 0.7)]
     assert len(spread_across_files(results, 5)) == 2
+
+
+def test_fuse_ranks_by_position_and_merges_duplicates():
+    a, b, c = _scored("f.pdf", 1, 0.9), _scored("f.pdf", 2, 0.8), _scored("f.pdf", 3, 0.7)
+    a, b, c = (replace(r, chunk_index=i, content=str(i)) for i, r in enumerate((a, b, c)))
+    # BM25 scores are on another scale; only the order of each list matters.
+    keyword = [replace(b, score=12.0), replace(c, score=3.0)]
+    fused = fuse([a, b, c], keyword)
+    assert [r.page for r in fused] == [2, 3, 1]
+    assert len(fused) == 3
+    assert all(0 < r.score <= 1 for r in fused)
+
+
+def test_fuse_top_in_both_lists_scores_one():
+    a = _scored("f.pdf", 1, 0.9)
+    assert fuse([a], [replace(a, score=7.0)])[0].score == pytest.approx(1.0)

@@ -40,6 +40,9 @@ def test_evaluate_follow_ups_compares_typed_and_rewritten_search():
             # The typed question finds the wrong page; the rewrite finds the right one first.
             return [_r("a.pdf", 9)] if vector == ["typed"] else [_r("a.pdf", 2), _r("a.pdf", 9)]
 
+        def keyword_search(self, user_id, query, k):
+            return []
+
     class Embedder:
         def embed_queries(self, texts):
             return [["typed"] if t == "از کی؟" else ["rewritten"] for t in texts]
