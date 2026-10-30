@@ -107,3 +107,14 @@ def test_keyword_search_is_per_user(store):
     _add_texts(store, "b", "b.pdf", ["چیز دیگر"])
     assert store.keyword_search("b", "987654") == []
     assert store.keyword_search("nobody", "987654") == []
+
+
+def test_keyword_search_weights_numbers_over_plain_words(store):
+    _add_texts(store, "a", "x.pdf", [
+        "سازمان شرکت",
+        "موجودی نقد 838,212",
+        "متن",
+        "متن دیگر",
+    ])
+    # Unweighted, chunk 1 wins with two matching words against one; the number's weight flips it.
+    assert store.keyword_search("a", "عدد 838212 مربوط به چه سازمان و شرکت است")[0].page == 2

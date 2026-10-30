@@ -24,6 +24,9 @@ def _keywords(text_sql: str) -> str:
 # BM25 constants, the usual defaults.
 BM25_K1 = 1.2
 BM25_B = 0.75
+# Words with a digit (amounts, note codes, dates) count this many times more. In a question like
+# "838212 ... and which company?" the plain words otherwise outvoted the exact number.
+BM25_DIGIT_WEIGHT = 3.0
 
 SCHEMA = f"""
 CREATE EXTENSION IF NOT EXISTS vector SCHEMA public;
@@ -313,7 +316,8 @@ class VectorStore:
             df AS (SELECT term, count(*) AS df FROM tf GROUP BY term),
             scored AS (
                 SELECT tf.id, sum(
-                    ln(1 + (stats.n - df.df + 0.5) / (df.df + 0.5))
+                    CASE WHEN tf.term ~ '\\d' THEN %(digit_weight)s ELSE 1 END
+                    * ln(1 + (stats.n - df.df + 0.5) / (df.df + 0.5))
                     * tf.f * (%(k1)s + 1)
                     / (tf.f + %(k1)s * (1 - %(b)s + %(b)s * tf.dl / stats.avgdl))
                 ) AS score
@@ -327,7 +331,7 @@ class VectorStore:
             ORDER BY scored.score DESC, docs.id
             LIMIT %(k)s
             """,
-            {"q": query, "user_id": user_id, "k": k, "k1": BM25_K1, "b": BM25_B},
+            {"q": query, "user_id": user_id, "k": k, "k1": BM25_K1, "b": BM25_B, "digit_weight": BM25_DIGIT_WEIGHT},
         ).fetchall()
         return [SearchResult(*r) for r in rows]
 
