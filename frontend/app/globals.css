@@ -63,3 +63,21 @@ body {
   background-size: 48px 48px;
   mask-image: linear-gradient(to bottom, black, transparent 85%);
 }
+
+/* A short fade-in when a conversation opens; skipped for users who ask for less motion. */
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+.animate-enter {
+  animation: enter 300ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-enter {
+    animation: none;
+  }
+}

@@ -123,7 +123,8 @@ export default function Chat({ conversationId, onSaved }: Props) {
   return (
     <>
       <main className="flex min-w-0 flex-col border-border lg:border-x">
-        <div className="flex flex-1 flex-col gap-10 p-8">
+        {/* The key remounts this block when loading ends, so the fade plays on the messages, not on "Loading…". */}
+        <div key={loading ? "loading" : "ready"} className="animate-enter flex flex-1 flex-col gap-10 p-8">
           {loading ? (
             <p className="text-muted-foreground">Loading conversation…</p>
           ) : loadError ? (
@@ -223,7 +224,7 @@ export default function Chat({ conversationId, onSaved }: Props) {
         </form>
       </main>
 
-      <aside className="flex flex-col gap-3 border-t border-border p-5 lg:sticky lg:top-0 lg:max-h-dvh lg:self-start lg:overflow-y-auto lg:border-t-0">
+      <aside className="animate-enter flex flex-col gap-3 border-t border-border p-5 lg:sticky lg:top-0 lg:max-h-dvh lg:self-start lg:overflow-y-auto lg:border-t-0">
         <h2 className="border-b border-border pb-3 font-medium">Sources</h2>
         {!turn || (!turn.sources.length && !turn.done) ? (
           <p className="text-sm text-muted-foreground">The sources behind an answer show up here.</p>
