@@ -7,6 +7,18 @@ import Conversations from "./conversations";
 import Documents from "./documents";
 import Login from "./login";
 
+// The open conversation lives in the URL (/c/12), so a refresh, a bookmark or Back reopens it.
+const pathFor = (id: number | null) => (id === null ? "/" : `/c/${id}`);
+const idFromPath = () => {
+  const m = window.location.pathname.match(/^\/c\/(\d+)$/);
+  return m ? Number(m[1]) : null;
+};
+const setPath = (id: number | null, mode: "push" | "replace") => {
+  if (window.location.pathname === pathFor(id)) return;
+  if (mode === "push") window.history.pushState(null, "", pathFor(id));
+  else window.history.replaceState(null, "", pathFor(id));
+};
+
 export default function Workspace() {
   // undefined while the session is being checked, null when logged out.
   const [user, setUser] = useState<User | null | undefined>(undefined);
@@ -16,27 +28,40 @@ export default function Workspace() {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [listVersion, setListVersion] = useState(0);
 
-  useEffect(() => {
-    api<User>("/auth/me")
-      .then(setUser)
-      .catch(() => setUser(null));
-    const ended = () => setUser(null);
-    window.addEventListener(SESSION_ENDED, ended);
-    return () => window.removeEventListener(SESSION_ENDED, ended);
-  }, []);
-
   const show = (id: number | null) => {
     setOpen((o) => ({ id, n: o.n + 1 }));
     setActiveId(id);
   };
 
+  const navigate = (id: number | null) => {
+    setPath(id, "push");
+    show(id);
+  };
+
+  useEffect(() => {
+    show(idFromPath());
+    api<User>("/auth/me")
+      .then(setUser)
+      .catch(() => setUser(null));
+    const ended = () => setUser(null);
+    const moved = () => show(idFromPath());
+    window.addEventListener(SESSION_ENDED, ended);
+    window.addEventListener("popstate", moved);
+    return () => {
+      window.removeEventListener(SESSION_ENDED, ended);
+      window.removeEventListener("popstate", moved);
+    };
+  }, []);
+
+  // Keeps the URL: after an expired session, signing in again returns to the same conversation.
   const login = (u: User) => {
-    show(null);
+    show(idFromPath());
     setUser(u);
   };
 
   async function logout() {
     await api("/auth/logout", { method: "POST" }).catch(() => null);
+    setPath(null, "replace");
     setUser(null);
   }
 
@@ -47,13 +72,15 @@ export default function Workspace() {
     <>
       <div className="flex min-w-0 flex-col">
         <Documents key={user.id} email={user.email} onLogout={logout} />
-        <Conversations key={`c${user.id}`} activeId={activeId} version={listVersion} onOpen={show} onNew={() => show(null)} />
+        <Conversations key={`c${user.id}`} activeId={activeId} version={listVersion} onOpen={navigate} onNew={() => navigate(null)} />
       </div>
       {/* key: switching account or conversation aborts a running answer and starts clean. */}
       <Chat
         key={`${user.id}:${open.n}`}
         conversationId={open.id}
         onSaved={(id) => {
+          // replace, not push: Back should not return to the empty chat this conversation started as.
+          setPath(id, "replace");
           setActiveId(id);
           setListVersion((v) => v + 1);
         }}
