@@ -13,6 +13,7 @@
   --ok: #1a7f37;
   --wait: #9a6700;
   --destructive: #cf222e;
+  --accent: #4f46e5;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -27,6 +28,7 @@
     --ok: #3fb950;
     --wait: #d29922;
     --destructive: #f85149;
+    --accent: #8b8bff;
   }
 }
 
@@ -41,6 +43,7 @@
   --color-ok: var(--ok);
   --color-wait: var(--wait);
   --color-destructive: var(--destructive);
+  --color-accent: var(--accent);
   /* Geist has no Arabic-script glyphs, so Persian text falls back to Vazirmatn glyph by glyph. */
   --font-sans: var(--font-geist), var(--font-vazirmatn), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), var(--font-vazirmatn), ui-monospace, monospace;
@@ -50,4 +53,13 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
+}
+
+/* Faint grid behind the landing hero, fading out toward the bottom. */
+.bg-grid {
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(to bottom, black, transparent 85%);
 }

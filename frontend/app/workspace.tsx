@@ -5,7 +5,7 @@ import { api, SESSION_ENDED, type User } from "./api-client";
 import Chat from "./chat";
 import Conversations from "./conversations";
 import Documents from "./documents";
-import Login from "./login";
+import Landing from "./landing";
 
 // The open conversation lives in the URL (/c/12), so a refresh, a bookmark or Back reopens it.
 const pathFor = (id: number | null) => (id === null ? "/" : `/c/${id}`);
@@ -66,7 +66,7 @@ export default function Workspace() {
   }
 
   if (user === undefined) return <p className="col-span-full p-8 text-muted-foreground">Loading…</p>;
-  if (user === null) return <Login onLogin={login} />;
+  if (user === null) return <Landing onLogin={login} />;
 
   return (
     <>

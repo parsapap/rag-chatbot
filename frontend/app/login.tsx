@@ -29,7 +29,7 @@ export default function Login({ onLogin }: { onLogin: (user: User) => void }) {
   }
 
   return (
-    <main className="col-span-full grid place-items-center p-8">
+    <div className="w-full max-w-sm">
       <form onSubmit={submit} className="flex w-full max-w-sm flex-col gap-4 border border-border bg-card p-6">
         <h1 className="font-medium">{registering ? "Create an account" : "Log in"}</h1>
         <p className="text-sm text-muted-foreground">
@@ -85,6 +85,6 @@ export default function Login({ onLogin }: { onLogin: (user: User) => void }) {
           {registering ? "Already have an account? Log in" : "No account yet? Create one"}
         </button>
       </form>
-    </main>
+    </div>
   );
 }
