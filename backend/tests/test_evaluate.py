@@ -30,10 +30,14 @@ def test_best_rank_takes_the_highest_of_several_pages():
     assert best_rank(results, "a.pdf", []) is None
 
 
-def test_evaluate_follow_ups_compares_typed_and_rewritten_search():
+def test_evaluate_follow_ups_compares_typed_and_rewritten_search(monkeypatch):
     from types import SimpleNamespace
 
+    from app.cli import evaluate
     from app.cli.evaluate import evaluate_follow_ups
+
+    # The container has a real Cohere key; a unit test must not call it.
+    monkeypatch.setattr(evaluate, "RERANKER", None)
 
     class Store:
         def search(self, user_id, vector, k):

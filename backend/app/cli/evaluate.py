@@ -8,10 +8,16 @@ from pathlib import Path
 from app.db.store import SearchResult, VectorStore
 from app.services.embeddings import Embedder
 from app.services.loaders import normalize
-from app.services.rag import CANDIDATE_FACTOR, RAG, fuse
+from app.services.rag import CANDIDATE_FACTOR, RAG, RERANK_CANDIDATES, fuse
+from app.services.rerank import Reranker, RerankError
 
 KS = (1, 3, 5, 10)
 REWRITE_PAUSE_SECONDS = 5
+# Cohere trial keys allow about 10 rerank calls a minute.
+RERANK_PAUSE_SECONDS = 6.5
+# The network here drops a call now and then (DNS failures, timeouts), so a few retries before giving up.
+RERANK_ATTEMPTS = 4
+RERANKER = Reranker.from_env()
 
 
 def rank_of(results: list[SearchResult], filename: str, page: int) -> int | None:
@@ -53,7 +59,20 @@ def hybrid(store, user_id: str, question: str, vector: list[float]) -> list[Sear
     if os.environ.get("EVAL_VECTOR_ONLY"):
         return store.search(user_id, vector, max(KS))
     n = max(KS) * CANDIDATE_FACTOR
-    return fuse(store.search(user_id, vector, n), store.keyword_search(user_id, normalize(question), n))[: max(KS)]
+    query = normalize(question)
+    fused = fuse(store.search(user_id, vector, n), store.keyword_search(user_id, query, n))
+    if RERANKER and not os.environ.get("EVAL_NO_RERANK"):
+        # Unlike RAG.retrieve, the eval never falls back: scoring the fused order as "reranked" would mislead.
+        for attempt in range(RERANK_ATTEMPTS):
+            try:
+                fused = RERANKER.rerank(query, fused[:RERANK_CANDIDATES])
+                break
+            except RerankError:
+                if attempt == RERANK_ATTEMPTS - 1:
+                    raise
+                time.sleep(RERANK_PAUSE_SECONDS * 2)
+        time.sleep(RERANK_PAUSE_SECONDS)
+    return fused[: max(KS)]
 
 
 def summarize(ranks: list[int | None], ks: tuple[int, ...] = KS) -> dict[str, float]:
