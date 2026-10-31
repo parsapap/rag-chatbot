@@ -1,7 +1,11 @@
 from collections.abc import Iterator
+from functools import cache
 from typing import Annotated
 
+import httpx
 from fastapi import Cookie, Depends, HTTPException
+from google import genai
+from google.genai import types
 
 from app.core.security import read_token
 from app.db.store import VectorStore
@@ -28,9 +32,22 @@ CurrentUser = Annotated[str, Depends(get_current_user)]
 Store = Annotated[VectorStore, Depends(get_store, scope="request")]
 
 
+KEEPALIVE_SECONDS = 300
+
+
+@cache
+def _clients() -> tuple[genai.Client, Embedder, Reranker | None]:
+    # One per process, and idle connections kept for 5 minutes (httpx closes them after 5s by
+    # default): a fresh TLS connection made embedding 1.3-1.5s instead of 0.5s.
+    # Without COHERE_API_KEY the reranker is off.
+    http = httpx.Client(timeout=60, limits=httpx.Limits(keepalive_expiry=KEEPALIVE_SECONDS))
+    client = genai.Client(http_options=types.HttpOptions(httpx_client=http))
+    return client, Embedder(client=client), Reranker.from_env()
+
+
 def get_rag(store: Store) -> RAG:
-    # Without COHERE_API_KEY the reranker is off and the fused order is used.
-    return RAG(store, Embedder(), reranker=Reranker.from_env())
+    client, embedder, reranker = _clients()
+    return RAG(store, embedder, client=client, reranker=reranker)
 
 
 Rag = Annotated[RAG, Depends(get_rag)]
