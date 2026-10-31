@@ -17,6 +17,9 @@ log = logging.getLogger(__name__)
 
 CHAT_MODEL = os.environ.get("GEMINI_CHAT_MODEL", "gemini-3.5-flash-lite")
 TOP_K = 5
+# Measured: minimal thinking halves time to first token (2.1s -> 1.1s) and rewrite (1.9s -> 1.0s),
+# with the same facts and citations in the answers. This model rejects thinking_budget=0.
+FAST_THINKING = types.ThinkingConfig(thinking_level="minimal")
 # Search this many times k, then pick k so a single file cannot take every slot.
 CANDIDATE_FACTOR = 3
 # Reciprocal rank fusion constant. The common default 60 flattens ranks (1/61 vs 1/70), so a number
@@ -182,7 +185,9 @@ class RAG:
             response = self._client.models.generate_content(
                 model=self.model,
                 contents=build_rewrite_prompt(question, history),
-                config=types.GenerateContentConfig(system_instruction=REWRITE_SYSTEM_PROMPT, temperature=0),
+                config=types.GenerateContentConfig(
+                    system_instruction=REWRITE_SYSTEM_PROMPT, temperature=0, thinking_config=FAST_THINKING
+                ),
             )
         except errors.APIError as e:
             # A better search query is a bonus, so any model error falls back to the question as typed.
@@ -242,4 +247,4 @@ class RAG:
                 yield chunk.text
 
     def _config(self) -> types.GenerateContentConfig:
-        return types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, temperature=0.2)
+        return types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, temperature=0.2, thinking_config=FAST_THINKING)
