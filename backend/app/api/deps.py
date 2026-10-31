@@ -7,6 +7,7 @@ from app.core.security import read_token
 from app.db.store import VectorStore
 from app.services.embeddings import Embedder
 from app.services.rag import RAG
+from app.services.rerank import Reranker
 
 
 def get_current_user(session: Annotated[str | None, Cookie()] = None) -> str:
@@ -28,7 +29,8 @@ Store = Annotated[VectorStore, Depends(get_store, scope="request")]
 
 
 def get_rag(store: Store) -> RAG:
-    return RAG(store, Embedder())
+    # Without COHERE_API_KEY the reranker is off and the fused order is used.
+    return RAG(store, Embedder(), reranker=Reranker.from_env())
 
 
 Rag = Annotated[RAG, Depends(get_rag)]

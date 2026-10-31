@@ -17,6 +17,7 @@ from app.services.rag import (
     spread_across_files,
 )
 from app.db.store import SearchResult
+from app.services.rerank import RerankError
 
 
 def _result(name: str, page: int, text: str) -> SearchResult:
@@ -199,3 +200,32 @@ def test_fuse_ranks_by_position_and_merges_duplicates():
 def test_fuse_top_in_both_lists_scores_one():
     a = _scored("f.pdf", 1, 0.9)
     assert fuse([a], [replace(a, score=7.0)])[0].score == pytest.approx(1.0)
+
+
+class FakeReranker:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.seen = []
+
+    def rerank(self, query, results):
+        self.seen.append((query, len(results)))
+        if self.fail:
+            raise RerankError("cohere 429")
+        return [replace(r, score=1 - i / 10) for i, r in enumerate(reversed(results))]
+
+
+def _pages(rag):
+    return [r.page for r in rag.retrieve("u", "سؤال ۱۲")]
+
+
+def test_reranker_order_wins_and_sees_normalized_query():
+    rag, _, _ = _rag([_result("a.pdf", p, f"t{p}") for p in (1, 2, 3)])
+    rag.reranker = FakeReranker()
+    assert _pages(rag) == [3, 2, 1]
+    assert rag.reranker.seen == [("سؤال 12", 3)]
+
+
+def test_reranker_failure_keeps_fused_order():
+    rag, _, _ = _rag([_result("a.pdf", p, f"t{p}") for p in (1, 2, 3)])
+    rag.reranker = FakeReranker(fail=True)
+    assert _pages(rag) == [1, 2, 3]
